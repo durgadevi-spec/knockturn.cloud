@@ -254,13 +254,13 @@ function PunchDataTab({ employeeCode }: { employeeCode: string }) {
                       <TableCell className="pl-3">
                         <span className="inline-flex items-center gap-2 font-medium text-[#3b4259]">
                           <span className={`h-2.5 w-2.5 rounded-full ${punch?.punch_in ? "bg-[#20b286]" : "bg-[#dfe3ee]"}`} />
-                          {punch?.punch_in ? format(new Date(punch.punch_in), "hh:mm a") : "—"}
+                          {punch?.punch_in ? format(new Date(punch.punch_in.replace('Z', '')), "hh:mm a") : "—"}
                         </span>
                       </TableCell>
                       <TableCell className="pl-3">
                         <span className="inline-flex items-center gap-2 font-medium text-[#3b4259]">
                           <span className={`h-2.5 w-2.5 rounded-full ${punch?.punch_out ? "bg-[#d8573f]" : "bg-[#dfe3ee]"}`} />
-                          {punch?.punch_out ? format(new Date(punch.punch_out), "hh:mm a") : "—"}
+                          {punch?.punch_out ? format(new Date(punch.punch_out.replace('Z', '')), "hh:mm a") : "—"}
                         </span>
                       </TableCell>
                       <TableCell className="pr-4 text-right font-bold text-[#2d2b41]">{hours}</TableCell>
