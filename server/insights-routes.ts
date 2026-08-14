@@ -1,5 +1,5 @@
 import type { Express } from "express";
-import { payrollPool, projectsPool, lmsPool, requirePool, timestrapPool } from "./insights-db";
+import { payrollPool, projectsPool, lmsPool, requirePool, timestrapPool, hrmsPool } from "./insights-db";
 
 /* ============================================================================
  * SCHEMA CONFIG — confirmed against real schema dumps (Aug 2026).
@@ -44,7 +44,38 @@ export function registerInsightsRoutes(app: Express) {
         [employeeCode, y, m]
       );
 
-      res.json({ punches: result.rows });
+      // Fetch approved OD dates from LMS
+      let odRanges: Array<{ start_date: string; end_date: string }> = [];
+      try {
+        const lms = requirePool(lmsPool, "LMS database");
+        const hrms = requirePool(hrmsPool, "HRMS database");
+        const empNameResult = await hrms.query(
+          `SELECT CONCAT(first_name, ' ', last_name) AS name FROM employees WHERE UPPER(employee_id) = UPPER($1) LIMIT 1`,
+          [employeeCode]
+        );
+        const empName = empNameResult.rows[0]?.name || employeeCode;
+
+        const odResult = await lms.query(
+          `SELECT l.start_date, l.end_date
+           FROM leaves l
+           WHERE (
+             REPLACE(LOWER(l.username), ' ', '') LIKE '%' || REPLACE(LOWER($1::text), ' ', '') || '%'
+             OR REPLACE(LOWER($1::text), ' ', '') LIKE '%' || REPLACE(LOWER(l.username), ' ', '') || '%'
+             OR REPLACE(LOWER(l.employee_name), ' ', '') LIKE '%' || REPLACE(LOWER($1::text), ' ', '') || '%'
+             OR REPLACE(LOWER($1::text), ' ', '') LIKE '%' || REPLACE(LOWER(l.employee_name), ' ', '') || '%'
+           )
+             AND LOWER(l.status) = 'approved'
+             AND LOWER(l.leave_type) = 'od'
+             AND l.start_date <= (make_date($2, $3, 1) + interval '1 month' - interval '1 day')
+             AND l.end_date >= make_date($2, $3, 1)`,
+          [empName, y, m]
+        );
+        odRanges = odResult.rows;
+      } catch (odErr: any) {
+        console.warn("[insights] OD lookup failed (non-fatal):", odErr.message);
+      }
+
+      res.json({ punches: result.rows, odRanges });
     } catch (error: any) {
       console.error("[insights] punches error:", error.message);
       res.status(error.status || 500).json({ error: error.message || "Failed to load punch data" });
@@ -81,17 +112,26 @@ export function registerInsightsRoutes(app: Express) {
         [employeeCode, `${y}-${m.toString().padStart(2, '0')}-%`]
       );
 
+      const hrms = requirePool(hrmsPool, "HRMS database");
+      const empNameResult = await hrms.query(
+        `SELECT CONCAT(first_name, ' ', last_name) AS name FROM employees WHERE UPPER(employee_id) = UPPER($1) LIMIT 1`,
+        [employeeCode]
+      );
+      const empName = empNameResult.rows[0]?.name || employeeCode; // fallback to code if not found
+
       const leaveResult = await lms.query(
-        `WITH emp AS (
-           SELECT name FROM employees WHERE UPPER(employee_code) = UPPER($1) LIMIT 1
+        `SELECT l.start_date, l.end_date
+         FROM leaves l
+         WHERE (
+           REPLACE(LOWER(l.username), ' ', '') LIKE '%' || REPLACE(LOWER($1::text), ' ', '') || '%'
+           OR REPLACE(LOWER($1::text), ' ', '') LIKE '%' || REPLACE(LOWER(l.username), ' ', '') || '%'
+           OR REPLACE(LOWER(l.employee_name), ' ', '') LIKE '%' || REPLACE(LOWER($1::text), ' ', '') || '%'
+           OR REPLACE(LOWER($1::text), ' ', '') LIKE '%' || REPLACE(LOWER(l.employee_name), ' ', '') || '%'
          )
-         SELECT l.start_date, l.end_date
-         FROM leaves l, emp
-         WHERE (l.employee_name = emp.name OR l.username = emp.name)
            AND LOWER(l.status) = 'approved'
-           AND l.start_date <= (make_date($2, $3, 1) + interval '1 month' - interval '1 day')
+         AND l.start_date <= (make_date($2, $3, 1) + interval '1 month' - interval '1 day')
            AND l.end_date >= make_date($2, $3, 1)`,
-        [employeeCode, y, m]
+        [empName, y, m]
       );
 
       res.json({
@@ -117,10 +157,10 @@ export function registerInsightsRoutes(app: Express) {
       const result = await pool.query(
         `SELECT DISTINCT p.id, p.title AS name, p.status, p.start_date, p.end_date AS due_date, p.progress
          FROM projects p
-         JOIN project_team_members ptm ON ptm.project_id = p.id
-         JOIN employees e ON e.id = ptm.employee_id
+         LEFT JOIN project_team_members ptm ON ptm.project_id = p.id
+         LEFT JOIN project_departments pd ON pd.project_id = p.id
+         JOIN employees e ON (e.id = ptm.employee_id OR e.department = pd.department)
          WHERE UPPER(e.emp_code) = UPPER($1)
-           AND p.status IS DISTINCT FROM 'completed'
          ORDER BY p.end_date ASC NULLS LAST`,
         [employeeCode]
       );
@@ -146,23 +186,35 @@ export function registerInsightsRoutes(app: Express) {
       const pool = requirePool(lmsPool, "LMS database");
       const y = parseInt(year) || new Date().getFullYear();
 
+      const hrms = requirePool(hrmsPool, "HRMS database");
+      const empNameResult = await hrms.query(
+        `SELECT CONCAT(first_name, ' ', last_name) AS name FROM employees WHERE UPPER(employee_id) = UPPER($1) LIMIT 1`,
+        [employeeCode]
+      );
+      const empName = empNameResult.rows[0]?.name || employeeCode;
+
       const result = await pool.query(
-        `WITH emp AS (
-           SELECT name FROM employees WHERE UPPER(employee_code) = UPPER($1) LIMIT 1
-         )
-         SELECT 'L-' || l.id AS id, (l.leave_type || ' Leave') AS type,
+        `SELECT 'L-' || l.id AS id, (l.leave_type || ' Leave') AS type,
                 l.start_date AS from_date, l.end_date AS to_date, l.status, l.reason
-         FROM leaves l, emp
-         WHERE (l.employee_name = emp.name OR l.username = emp.name)
+         FROM leaves l
+         WHERE (
+           REPLACE(LOWER(l.username), ' ', '') LIKE '%' || REPLACE(LOWER($1::text), ' ', '') || '%'
+           OR REPLACE(LOWER($1::text), ' ', '') LIKE '%' || REPLACE(LOWER(l.username), ' ', '') || '%'
+           OR REPLACE(LOWER(l.employee_name), ' ', '') LIKE '%' || REPLACE(LOWER($1::text), ' ', '') || '%'
+           OR REPLACE(LOWER($1::text), ' ', '') LIKE '%' || REPLACE(LOWER(l.employee_name), ' ', '') || '%'
+         )
            AND date_part('year', l.start_date) = $2
          UNION ALL
          SELECT 'P-' || p.id AS id, (p.permission_type || ' Permission') AS type,
                 p.permission_date AS from_date, p.permission_date AS to_date, p.status, p.reason
-         FROM permissions p, emp
-         WHERE p.username = emp.name
+         FROM permissions p
+         WHERE (
+           REPLACE(LOWER(p.username), ' ', '') LIKE '%' || REPLACE(LOWER($1::text), ' ', '') || '%'
+           OR REPLACE(LOWER($1::text), ' ', '') LIKE '%' || REPLACE(LOWER(p.username), ' ', '') || '%'
+         )
            AND date_part('year', p.permission_date) = $2
          ORDER BY from_date DESC`,
-        [employeeCode, y]
+        [empName, y]
       );
 
       res.json({ leaves: result.rows });

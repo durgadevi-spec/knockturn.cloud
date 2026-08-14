@@ -120,6 +120,21 @@ function PunchDataTab({ employeeCode }: { employeeCode: string }) {
   const punches: Array<{ work_date: string; punch_in: string | null; punch_out: string | null }> =
     (data as any)?.punches ?? [];
 
+  const odRanges: Array<{ start_date: string; end_date: string }> =
+    (data as any)?.odRanges ?? [];
+
+  // Build a set of OD dates for quick lookup
+  const odDates = useMemo(() => {
+    const s = new Set<string>();
+    odRanges.forEach((r) => {
+      const start = new Date(r.start_date);
+      const end = new Date(r.end_date);
+      const days = eachDayOfInterval({ start, end });
+      days.forEach((d) => s.add(format(d, "yyyy-MM-dd")));
+    });
+    return s;
+  }, [odRanges]);
+
   const punchMap = useMemo(
     () => new Map(punches.map((p) => [format(new Date(p.work_date), "yyyy-MM-dd"), p])),
     [punches]
@@ -135,7 +150,8 @@ function PunchDataTab({ employeeCode }: { employeeCode: string }) {
     const punch = punchMap.get(key);
     const isRestDay = isSunday(day);
     const isFutureDay = isFuture(day);
-    const isLeaveDay = !isFutureDay && !punch && !isRestDay;
+    const isODDay = odDates.has(key);
+    const isLeaveDay = !isFutureDay && !punch && !isRestDay && !isODDay;
     const outHours =
       punch && punch.punch_in && punch.punch_out
         ? ((new Date(punch.punch_out).getTime() - new Date(punch.punch_in).getTime()) / 3_600_000).toFixed(1)
@@ -147,6 +163,7 @@ function PunchDataTab({ employeeCode }: { employeeCode: string }) {
       punch,
       isRestDay,
       isLeaveDay,
+      isODDay,
       isFutureDay,
       hours: outHours,
     };
@@ -214,8 +231,8 @@ function PunchDataTab({ employeeCode }: { employeeCode: string }) {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {rows.map(({ key, date, punch, isRestDay, isLeaveDay, isFutureDay, hours }) => {
-                  const statusColor = isLeaveDay ? "bg-[#f4b740]" : isRestDay ? "bg-[#9ea8c1]" : isFutureDay ? "bg-[#edf1f8]" : "bg-[#20b286]";
+                {rows.map(({ key, date, punch, isRestDay, isLeaveDay, isODDay, isFutureDay, hours }) => {
+                  const statusColor = isODDay ? "bg-[#3b82f6]" : isLeaveDay ? "bg-[#f4b740]" : isRestDay ? "bg-[#9ea8c1]" : isFutureDay ? "bg-[#edf1f8]" : "bg-[#20b286]";
 
                   return (
                     <TableRow key={key} data-testid={`row-punch-${key}`}>
@@ -223,7 +240,11 @@ function PunchDataTab({ employeeCode }: { employeeCode: string }) {
                         <div className="flex items-center gap-2">
                           <span className={`h-2.5 w-2.5 rounded-full ${statusColor}`} />
                           <span>{format(date, "EEE, dd MMM")}</span>
-                          {isRestDay || (isLeaveDay && !isFutureDay) ? (
+                          {isODDay ? (
+                            <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#3b82f6]">
+                              OD
+                            </span>
+                          ) : isRestDay || (isLeaveDay && !isFutureDay) ? (
                             <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#7e849d]">
                               {isLeaveDay ? "Leave" : isRestDay ? format(date, "EEE") : ""}
                             </span>
