@@ -1,8 +1,17 @@
-import { type User, type InsertUser, type Employee } from "@shared/schema";
+import {
+  type User,
+  type InsertUser,
+  type Employee,
+  type EmployeeAppAccess,
+} from "@shared/schema";
 import { randomUUID } from "crypto";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
-import { employees as employeesTable, users as usersTable } from "@shared/schema";
+import {
+  employees as employeesTable,
+  employeeAppAccess as employeeAppAccessTable,
+  users as usersTable,
+} from "@shared/schema";
 import { eq, and, or } from "drizzle-orm";
 
 // modify the interface with any CRUD methods
@@ -16,7 +25,20 @@ export interface IStorage {
     username: string,
     employeeCode: string
   ): Promise<Employee | undefined>;
+  getEmployeeById(id: string): Promise<Employee | undefined>;
+  getEmployeeByCode(employeeCode: string): Promise<Employee | undefined>;
   getAllEmployees(): Promise<Employee[]>;
+  updateEmployeePassword(
+    employeeId: string,
+    newPassword: string
+  ): Promise<Employee | undefined>;
+  getAllAppAccess(): Promise<EmployeeAppAccess[]>;
+  getAppAccessForEmployee(employeeId: string): Promise<EmployeeAppAccess[]>;
+  setAppAccess(
+    employeeId: string,
+    appId: string,
+    granted: boolean
+  ): Promise<EmployeeAppAccess>;
 }
 
 export class MemStorage implements IStorage {
@@ -47,8 +69,32 @@ export class MemStorage implements IStorage {
     throw new Error("MemStorage does not support employees");
   }
 
+  async getEmployeeById(): Promise<Employee | undefined> {
+    throw new Error("MemStorage does not support employees");
+  }
+
+  async getEmployeeByCode(): Promise<Employee | undefined> {
+    throw new Error("MemStorage does not support employees");
+  }
+
+  async updateEmployeePassword(): Promise<Employee | undefined> {
+    throw new Error("MemStorage does not support employees");
+  }
+
   async getAllEmployees(): Promise<Employee[]> {
     throw new Error("MemStorage does not support employees");
+  }
+
+  async getAllAppAccess(): Promise<EmployeeAppAccess[]> {
+    throw new Error("MemStorage does not support app access");
+  }
+
+  async getAppAccessForEmployee(): Promise<EmployeeAppAccess[]> {
+    throw new Error("MemStorage does not support app access");
+  }
+
+  async setAppAccess(): Promise<EmployeeAppAccess> {
+    throw new Error("MemStorage does not support app access");
   }
 }
 
@@ -110,8 +156,83 @@ export class DatabaseStorage implements IStorage {
     return result[0];
   }
 
+  async getEmployeeById(id: string): Promise<Employee | undefined> {
+    const result = await this.db
+      .select()
+      .from(employeesTable)
+      .where(eq(employeesTable.id, id))
+      .limit(1);
+    return result[0];
+  }
+
+  async getEmployeeByCode(employeeCode: string): Promise<Employee | undefined> {
+    const result = await this.db
+      .select()
+      .from(employeesTable)
+      .where(eq(employeesTable.employeeCode, employeeCode.trim().toUpperCase()))
+      .limit(1);
+    return result[0];
+  }
+
   async getAllEmployees(): Promise<Employee[]> {
     return await this.db.select().from(employeesTable);
+  }
+
+  async updateEmployeePassword(
+    employeeId: string,
+    newPassword: string
+  ): Promise<Employee | undefined> {
+    const result = await this.db
+      .update(employeesTable)
+      .set({ password: newPassword })
+      .where(eq(employeesTable.id, employeeId))
+      .returning();
+    return result[0];
+  }
+
+  async getAllAppAccess(): Promise<EmployeeAppAccess[]> {
+    return await this.db.select().from(employeeAppAccessTable);
+  }
+
+  async getAppAccessForEmployee(
+    employeeId: string
+  ): Promise<EmployeeAppAccess[]> {
+    return await this.db
+      .select()
+      .from(employeeAppAccessTable)
+      .where(eq(employeeAppAccessTable.employeeId, employeeId));
+  }
+
+  async setAppAccess(
+    employeeId: string,
+    appId: string,
+    granted: boolean
+  ): Promise<EmployeeAppAccess> {
+    const existing = await this.db
+      .select()
+      .from(employeeAppAccessTable)
+      .where(
+        and(
+          eq(employeeAppAccessTable.employeeId, employeeId),
+          eq(employeeAppAccessTable.appId, appId)
+        )
+      )
+      .limit(1);
+
+    if (existing[0]) {
+      const result = await this.db
+        .update(employeeAppAccessTable)
+        .set({ granted, updatedAt: new Date().toISOString() })
+        .where(eq(employeeAppAccessTable.id, existing[0].id))
+        .returning();
+      return result[0];
+    }
+
+    const result = await this.db
+      .insert(employeeAppAccessTable)
+      .values({ employeeId, appId, granted })
+      .returning();
+    return result[0];
   }
 }
 

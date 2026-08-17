@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
+import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -22,6 +23,7 @@ import {
   BookOpen,
   Briefcase,
   Gauge,
+  Settings,
 } from "lucide-react";
 
 import logoUrl from "@assets/WhatsApp_Image_2026-01-17_at_10.38.06_1768626585689.jpeg";
@@ -30,6 +32,7 @@ interface User {
   username: string;
   employeeCode: string;
   email?: string;
+  isAdmin?: boolean;
 }
 
 interface QuickLink {
@@ -491,9 +494,20 @@ export default function Dashboard() {
     });
   };
 
+  // Resolved app access (defaults + any admin overrides) for this
+  // employee. Falls back to the hardcoded lists below while loading or if
+  // the request fails, so existing behavior is never interrupted.
+  const { data: resolvedAppAccess } = useQuery<Record<string, boolean>>({
+    queryKey: [`/api/app-access/${user?.employeeCode}`],
+    enabled: !!user?.employeeCode,
+  });
+
   if (!user) return null;
 
   const filteredLinks = QUICK_LINKS.filter((link) => {
+    if (resolvedAppAccess && link.id in resolvedAppAccess) {
+      return resolvedAppAccess[link.id];
+    }
     if (link.id === "boq") {
       return ALLOWED_BOQ_EMPLOYEE_CODES.includes(user.employeeCode);
     }
@@ -641,14 +655,27 @@ export default function Dashboard() {
                 Quick Access
               </h3>
             </div>
-            <Button
-              onClick={() => setLocation("/insights")}
-              className="gap-2 shadow-md shadow-primary/20"
-              data-testid="button-dashboard"
-            >
-              <Gauge className="w-4 h-4" />
-              Dashboard
-            </Button>
+            <div className="flex items-center gap-2">
+              {user.isAdmin && (
+                <Button
+                  variant="outline"
+                  onClick={() => setLocation("/admin/app-access")}
+                  className="gap-2"
+                  data-testid="button-settings"
+                >
+                  <Settings className="w-4 h-4" />
+                  Settings
+                </Button>
+              )}
+              <Button
+                onClick={() => setLocation("/insights")}
+                className="gap-2 shadow-md shadow-primary/20"
+                data-testid="button-dashboard"
+              >
+                <Gauge className="w-4 h-4" />
+                Dashboard
+              </Button>
+            </div>
           </div>
         </motion.div>
 

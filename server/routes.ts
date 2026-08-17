@@ -3,11 +3,20 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { z } from "zod";
 import { registerInsightsRoutes } from "./insights-routes";
+import {
+  registerAdminRoutes,
+  getResolvedAppAccessForEmployee,
+} from "./admin-routes";
 
 const loginSchema = z.object({
   username: z.string().min(1, "Username is required"),
   employeeCode: z.string().min(1, "Employee code is required"),
   password: z.string().min(1, "Password is required"),
+});
+
+const resetPasswordSchema = z.object({
+  employeeCode: z.string().min(1, "Employee code is required"),
+  newPassword: z.string().min(4, "Password must be at least 4 characters"),
 });
 
 export async function registerRoutes(
@@ -51,10 +60,44 @@ export async function registerRoutes(
           id: employee.id,
           username: employee.username,
           employeeCode: employee.employeeCode,
+          isAdmin: employee.isAdmin,
         },
       });
     } catch (error) {
       console.error("Login error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // Forgot Password — the employee proves who they are with just their
+  // employee code and sets a new password directly. No email/SMS is
+  // sent; the new password is simply saved to the employees table.
+  app.post("/api/auth/reset-password", async (req, res) => {
+    try {
+      const parsed = resetPasswordSchema.safeParse(req.body);
+
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: "Invalid request body",
+          details: parsed.error.errors,
+        });
+      }
+
+      const { employeeCode, newPassword } = parsed.data;
+
+      const employee = await storage.getEmployeeByCode(employeeCode);
+
+      if (!employee) {
+        return res.status(401).json({
+          error: "No matching employee found. Check your employee code.",
+        });
+      }
+
+      await storage.updateEmployeePassword(employee.id, newPassword);
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Reset password error:", error);
       res.status(500).json({ error: "Internal server error" });
     }
   });
@@ -113,6 +156,27 @@ export async function registerRoutes(
       res.status(500).json({ error: "Internal server error" });
     }
   });
+
+  // Resolved app access (defaults + any admin overrides) for a single
+  // employee — used by the dashboard to decide which Quick Access tiles
+  // to show the currently logged-in employee.
+  app.get("/api/app-access/:employeeCode", async (req, res) => {
+    try {
+      const access = await getResolvedAppAccessForEmployee(
+        req.params.employeeCode
+      );
+      if (!access) {
+        return res.status(404).json({ error: "Employee not found" });
+      }
+      res.json(access);
+    } catch (error) {
+      console.error("Error resolving app access:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // Admin-only routes for assigning apps to employees.
+  registerAdminRoutes(app);
 
   return httpServer;
 }

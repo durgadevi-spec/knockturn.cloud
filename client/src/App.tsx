@@ -7,6 +7,7 @@ import NotFound from "@/pages/not-found";
 import Login from "@/pages/login";
 import Dashboard from "@/pages/dashboard";
 import Insights from "@/pages/insights";
+import AdminAppAccess from "@/pages/admin-app-access";
 
 function Router() {
   return (
@@ -14,6 +15,7 @@ function Router() {
       <Route path="/" component={Login} />
       <Route path="/dashboard" component={Dashboard} />
       <Route path="/insights" component={Insights} />
+      <Route path="/admin/app-access" component={AdminAppAccess} />
       <Route component={NotFound} />
     </Switch>
   );
