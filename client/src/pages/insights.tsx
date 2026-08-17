@@ -280,6 +280,20 @@ function PunchDataTab({ employeeCode }: { employeeCode: string }) {
 /* Tab 2 — Timesheet Compliance                                            */
 /* ---------------------------------------------------------------------- */
 
+// Company holidays — no holidays table exists in any connected database
+// (TimeStrap/Payroll/LMS/HRMS/Projects), so this is a plain editable list.
+// Add/remove entries as "yyyy-MM-dd". These days are excluded from the
+// compliance calendar the same way Sundays and approved leave already are.
+const COMPANY_HOLIDAYS: string[] = [
+  "2026-08-15", // Independence Day
+  "2026-09-14", // Ganesh Chaturthi
+  "2026-10-02", // Gandhi Jayanthi
+  "2026-10-20", // Ayudha Pooja
+  "2026-11-07", // Diwali
+  "2026-12-25", // Christmas
+];
+const HOLIDAY_SET = new Set(COMPANY_HOLIDAYS);
+
 function TimesheetComplianceTab({ employeeCode }: { employeeCode: string }) {
   const [month, setMonth] = useState(new Date());
   const year = month.getFullYear();
@@ -303,18 +317,29 @@ function TimesheetComplianceTab({ employeeCode }: { employeeCode: string }) {
     (data as any)?.leaveRanges ?? [];
 
   const isOnLeave = (d: Date) => {
-    const t = d.getTime();
-    return leaveRanges.some(
-      (r) => t >= new Date(r.start_date).getTime() && t <= new Date(r.end_date).getTime()
-    );
+    // Compare calendar dates as local-timezone yyyy-MM-dd strings — the
+    // same approach the working Leaves & Permissions tab already uses
+    // (format(new Date(l.from_date), ...)). The server parses DB date
+    // values using its own local timezone and serializes them as UTC, so
+    // a raw slice of the ISO string can land on the wrong day; running
+    // the value back through `new Date(...)` + local `format()` restores
+    // the correct calendar date, matching how `d` itself is formatted.
+    const day = format(d, "yyyy-MM-dd");
+    return leaveRanges.some((r) => {
+      const start = format(new Date(r.start_date), "yyyy-MM-dd");
+      const end = format(new Date(r.end_date), "yyyy-MM-dd");
+      return day >= start && day <= end;
+    });
   };
+
+  const isHoliday = (d: Date) => HOLIDAY_SET.has(format(d, "yyyy-MM-dd"));
 
   const allDaysInMonth = useMemo(
     () => eachDayOfInterval({ start: startOfMonth(month), end: endOfMonth(month) }),
     [month]
   );
 
-  const workingDays = allDaysInMonth.filter((d) => !isSunday(d) && !isFuture(d));
+  const workingDays = allDaysInMonth.filter((d) => !isSunday(d) && !isFuture(d) && !isHoliday(d));
   const leaveDays = workingDays.filter((d) => isOnLeave(d));
   const trackedDays = workingDays.filter((d) => !isOnLeave(d));
   const submittedCount = trackedDays.filter((d) =>
@@ -325,8 +350,9 @@ function TimesheetComplianceTab({ employeeCode }: { employeeCode: string }) {
     ? Math.round((submittedCount / trackedDays.length) * 100)
     : 0;
 
-  const dayStatus = (d: Date): "submitted" | "missing" | "leave" | "none" => {
+  const dayStatus = (d: Date): "submitted" | "missing" | "leave" | "holiday" | "none" => {
     if (isSunday(d) || isFuture(d)) return "none";
+    if (isHoliday(d)) return "holiday";
     if (isOnLeave(d)) return "leave";
     return submittedDates.has(format(d, "yyyy-MM-dd")) ? "submitted" : "missing";
   };
@@ -334,6 +360,7 @@ function TimesheetComplianceTab({ employeeCode }: { employeeCode: string }) {
   const DOT_COLOR: Record<string, string> = {
     submitted: "bg-emerald-500",
     missing: "bg-red-500",
+    holiday: "bg-sky-500",
     leave: "bg-amber-500",
     none: "",
   };
@@ -420,6 +447,9 @@ function TimesheetComplianceTab({ employeeCode }: { employeeCode: string }) {
                 </span>
                 <span className="flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-amber-500" /> Leave
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-sky-500" /> Holiday
                 </span>
               </div>
             </div>
