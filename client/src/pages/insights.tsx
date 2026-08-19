@@ -108,6 +108,13 @@ function MonthSwitcher({
 /* Tab 1 — Punch Data                                                      */
 /* ---------------------------------------------------------------------- */
 
+// Fixed-date Indian national holidays (same date every year). Keyed by "MM-dd".
+const FIXED_NATIONAL_HOLIDAYS: Record<string, string> = {
+  "01-26": "Republic Day",
+  "08-15": "Independence Day",
+  "10-02": "Gandhi Jayanti",
+};
+
 function PunchDataTab({ employeeCode }: { employeeCode: string }) {
   const [month, setMonth] = useState(new Date());
   const year = month.getFullYear();
@@ -131,15 +138,25 @@ function PunchDataTab({ employeeCode }: { employeeCode: string }) {
     [punches]
   );
 
-  const holidayMap = useMemo(
-    () => new Map(holidays.map((h) => [format(new Date(h.date), "yyyy-MM-dd"), h.name])),
-    [holidays]
-  );
-
   const monthDays = useMemo(
     () => eachDayOfInterval({ start: startOfMonth(month), end: endOfMonth(month) }),
     [month]
   );
+
+  // Fixed-date Indian national holidays, used as a fallback so these always
+  // show correctly even if the backend /api/insights/holidays route has no
+  // data yet. Any date the API does return for will override these.
+  const holidayMap = useMemo(() => {
+    const map = new Map<string, string>();
+    monthDays.forEach((day) => {
+      const name = FIXED_NATIONAL_HOLIDAYS[format(day, "MM-dd")];
+      if (name) map.set(format(day, "yyyy-MM-dd"), name);
+    });
+    holidays.forEach((h) => {
+      map.set(format(new Date(h.date), "yyyy-MM-dd"), h.name);
+    });
+    return map;
+  }, [holidays, monthDays]);
 
   const rows = monthDays.map((day) => {
     const key = format(day, "yyyy-MM-dd");
@@ -238,7 +255,13 @@ function PunchDataTab({ employeeCode }: { employeeCode: string }) {
                           <span>{format(date, "EEE, dd MMM")}</span>
                           {isHolidayDay || isWeekendDay || (isLeaveDay && !isFutureDay) ? (
                             <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#7e849d]">
-                              {isHolidayDay ? holidayName || "Holiday" : isLeaveDay ? "Leave" : isWeekendDay ? "Sun" : ""}
+                              {isHolidayDay
+                                ? holidayName || "Holiday"
+                                : isLeaveDay
+                                  ? "Leave"
+                                  : isWeekendDay
+                                    ? format(date, "EEE").toUpperCase()
+                                    : ""}
                             </span>
                           ) : null}
                         </div>
