@@ -156,12 +156,21 @@ function PunchDataTab({ employeeCode }: { employeeCode: string }) {
     [month]
   );
 
-  const isOnLeave = (d: Date) => {
-    const t = d.getTime();
-    return leaveRanges.some(
-      (r) => t >= new Date(r.start_date).getTime() && t <= new Date(r.end_date).getTime()
-    );
-  };
+  // Expand each approved leave range into "yyyy-MM-dd" calendar dates rather
+  // than comparing raw timestamps, so an approved LMS leave day is never
+  // mislabeled as "Missing" here due to a timezone edge case.
+  const leaveDateSet = useMemo(() => {
+    const set = new Set<string>();
+    leaveRanges.forEach((r) => {
+      const start = new Date(r.start_date);
+      const end = new Date(r.end_date);
+      if (isNaN(start.getTime()) || isNaN(end.getTime())) return;
+      eachDayOfInterval({ start, end }).forEach((d) => set.add(format(d, "yyyy-MM-dd")));
+    });
+    return set;
+  }, [leaveRanges]);
+
+  const isOnLeave = (d: Date) => leaveDateSet.has(format(d, "yyyy-MM-dd"));
 
   // Fixed-date Indian national holidays, used as a fallback so these always
   // show correctly even if the backend /api/insights/holidays route has no
@@ -345,12 +354,23 @@ function TimesheetComplianceTab({ employeeCode }: { employeeCode: string }) {
   const leaveRanges: Array<{ start_date: string; end_date: string }> =
     (data as any)?.leaveRanges ?? [];
 
-  const isOnLeave = (d: Date) => {
-    const t = d.getTime();
-    return leaveRanges.some(
-      (r) => t >= new Date(r.start_date).getTime() && t <= new Date(r.end_date).getTime()
-    );
-  };
+  // Expand each approved leave range into a set of "yyyy-MM-dd" calendar
+  // dates, instead of comparing raw timestamps. Comparing getTime() directly
+  // against a UTC-parsed date string can shift by several hours in IST and
+  // silently drop the first/last day of a leave range, wrongly showing an
+  // approved leave day as "missing".
+  const leaveDateSet = useMemo(() => {
+    const set = new Set<string>();
+    leaveRanges.forEach((r) => {
+      const start = new Date(r.start_date);
+      const end = new Date(r.end_date);
+      if (isNaN(start.getTime()) || isNaN(end.getTime())) return;
+      eachDayOfInterval({ start, end }).forEach((d) => set.add(format(d, "yyyy-MM-dd")));
+    });
+    return set;
+  }, [leaveRanges]);
+
+  const isOnLeave = (d: Date) => leaveDateSet.has(format(d, "yyyy-MM-dd"));
 
   const allDaysInMonth = useMemo(
     () => eachDayOfInterval({ start: startOfMonth(month), end: endOfMonth(month) }),
