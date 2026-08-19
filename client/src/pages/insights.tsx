@@ -128,10 +128,19 @@ function PunchDataTab({ employeeCode }: { employeeCode: string }) {
     queryKey: [`/api/insights/holidays?year=${year}&month=${monthNum}`],
   });
 
+  // Same endpoint/query key the Timesheet Compliance tab uses for leaveRanges,
+  // so both tabs show identical leave days and share the query cache.
+  const { data: timesheetData } = useQuery({
+    queryKey: [`/api/insights/timesheet-status?employeeCode=${employeeCode}&year=${year}&month=${monthNum}`],
+  });
+
   const punches: Array<{ work_date: string; punch_in: string | null; punch_out: string | null }> =
     (data as any)?.punches ?? [];
 
   const holidays: Array<{ date: string; name: string }> = (holidayData as any)?.holidays ?? [];
+
+  const leaveRanges: Array<{ start_date: string; end_date: string }> =
+    (timesheetData as any)?.leaveRanges ?? [];
 
   const punchMap = useMemo(
     () => new Map(punches.map((p) => [format(new Date(p.work_date), "yyyy-MM-dd"), p])),
@@ -142,6 +151,13 @@ function PunchDataTab({ employeeCode }: { employeeCode: string }) {
     () => eachDayOfInterval({ start: startOfMonth(month), end: endOfMonth(month) }),
     [month]
   );
+
+  const isOnLeave = (d: Date) => {
+    const t = d.getTime();
+    return leaveRanges.some(
+      (r) => t >= new Date(r.start_date).getTime() && t <= new Date(r.end_date).getTime()
+    );
+  };
 
   // Fixed-date Indian national holidays, used as a fallback so these always
   // show correctly even if the backend /api/insights/holidays route has no
@@ -165,7 +181,8 @@ function PunchDataTab({ employeeCode }: { employeeCode: string }) {
     const isFutureDay = isFuture(day);
     const holidayName = holidayMap.get(key);
     const isHolidayDay = !isFutureDay && !!holidayName;
-    const isLeaveDay = !isFutureDay && !punch && !isWeekendDay && !isHolidayDay;
+    const isLeaveDay = !isFutureDay && !isHolidayDay && isOnLeave(day);
+    const isMissingDay = !isFutureDay && !isHolidayDay && !isWeekendDay && !isLeaveDay && !punch;
     const outHours =
       punch && punch.punch_in && punch.punch_out
         ? ((new Date(punch.punch_out).getTime() - new Date(punch.punch_in).getTime()) / 3_600_000).toFixed(1)
@@ -177,6 +194,7 @@ function PunchDataTab({ employeeCode }: { employeeCode: string }) {
       punch,
       isWeekendDay,
       isLeaveDay,
+      isMissingDay,
       isHolidayDay,
       holidayName,
       isFutureDay,
@@ -236,52 +254,58 @@ function PunchDataTab({ employeeCode }: { employeeCode: string }) {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {rows.map(({ key, date, punch, isWeekendDay, isLeaveDay, isHolidayDay, holidayName, isFutureDay, hours }) => {
-                  const statusColor = isHolidayDay
-                    ? "bg-[#a26df0]"
-                    : isLeaveDay
-                      ? "bg-[#f4b740]"
-                      : isWeekendDay
-                        ? "bg-[#9ea8c1]"
-                        : isFutureDay
-                          ? "bg-[#edf1f8]"
-                          : "bg-[#20b286]";
+                {rows.map(
+                  ({ key, date, punch, isWeekendDay, isLeaveDay, isMissingDay, isHolidayDay, holidayName, isFutureDay, hours }) => {
+                    const statusColor = isHolidayDay
+                      ? "bg-[#a26df0]"
+                      : isLeaveDay
+                        ? "bg-[#f4b740]"
+                        : isMissingDay
+                          ? "bg-[#e2685c]"
+                          : isWeekendDay
+                            ? "bg-[#9ea8c1]"
+                            : isFutureDay
+                              ? "bg-[#edf1f8]"
+                              : "bg-[#20b286]";
 
-                  return (
-                    <TableRow key={key} data-testid={`row-punch-${key}`}>
-                      <TableCell className="pl-4 font-semibold text-[#2d2b41]">
-                        <div className="flex items-center gap-2">
-                          <span className={`h-2.5 w-2.5 rounded-full ${statusColor}`} />
-                          <span>{format(date, "EEE, dd MMM")}</span>
-                          {isHolidayDay || isWeekendDay || (isLeaveDay && !isFutureDay) ? (
-                            <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#7e849d]">
-                              {isHolidayDay
-                                ? holidayName || "Holiday"
-                                : isLeaveDay
-                                  ? "Leave"
-                                  : isWeekendDay
-                                    ? format(date, "EEE").toUpperCase()
-                                    : ""}
-                            </span>
-                          ) : null}
-                        </div>
-                      </TableCell>
-                      <TableCell className="pl-3">
-                        <span className="inline-flex items-center gap-2 font-medium text-[#3b4259]">
-                          <span className={`h-2.5 w-2.5 rounded-full ${punch?.punch_in ? "bg-[#20b286]" : "bg-[#dfe3ee]"}`} />
-                          {punch?.punch_in ? format(new Date(punch.punch_in), "hh:mm a") : "—"}
-                        </span>
-                      </TableCell>
-                      <TableCell className="pl-3">
-                        <span className="inline-flex items-center gap-2 font-medium text-[#3b4259]">
-                          <span className={`h-2.5 w-2.5 rounded-full ${punch?.punch_out ? "bg-[#d8573f]" : "bg-[#dfe3ee]"}`} />
-                          {punch?.punch_out ? format(new Date(punch.punch_out), "hh:mm a") : "—"}
-                        </span>
-                      </TableCell>
-                      <TableCell className="pr-4 text-right font-bold text-[#2d2b41]">{hours}</TableCell>
-                    </TableRow>
-                  );
-                })}
+                    return (
+                      <TableRow key={key} data-testid={`row-punch-${key}`}>
+                        <TableCell className="pl-4 font-semibold text-[#2d2b41]">
+                          <div className="flex items-center gap-2">
+                            <span className={`h-2.5 w-2.5 rounded-full ${statusColor}`} />
+                            <span>{format(date, "EEE, dd MMM")}</span>
+                            {isHolidayDay || isWeekendDay || isLeaveDay || isMissingDay ? (
+                              <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#7e849d]">
+                                {isHolidayDay
+                                  ? holidayName || "Holiday"
+                                  : isLeaveDay
+                                    ? "Leave"
+                                    : isMissingDay
+                                      ? "Missing"
+                                      : isWeekendDay
+                                        ? format(date, "EEE").toUpperCase()
+                                        : ""}
+                              </span>
+                            ) : null}
+                          </div>
+                        </TableCell>
+                        <TableCell className="pl-3">
+                          <span className="inline-flex items-center gap-2 font-medium text-[#3b4259]">
+                            <span className={`h-2.5 w-2.5 rounded-full ${punch?.punch_in ? "bg-[#20b286]" : "bg-[#dfe3ee]"}`} />
+                            {punch?.punch_in ? format(new Date(punch.punch_in), "hh:mm a") : "—"}
+                          </span>
+                        </TableCell>
+                        <TableCell className="pl-3">
+                          <span className="inline-flex items-center gap-2 font-medium text-[#3b4259]">
+                            <span className={`h-2.5 w-2.5 rounded-full ${punch?.punch_out ? "bg-[#d8573f]" : "bg-[#dfe3ee]"}`} />
+                            {punch?.punch_out ? format(new Date(punch.punch_out), "hh:mm a") : "—"}
+                          </span>
+                        </TableCell>
+                        <TableCell className="pr-4 text-right font-bold text-[#2d2b41]">{hours}</TableCell>
+                      </TableRow>
+                    );
+                  }
+                )}
               </TableBody>
             </Table>
           </div>
