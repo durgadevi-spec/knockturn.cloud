@@ -8,11 +8,15 @@ import {
   endOfMonth,
   eachDayOfInterval,
   isSameDay,
-  isWeekend,
   isFuture,
   addMonths,
   subMonths,
 } from "date-fns";
+
+// Only Sunday is the weekly off — Saturday is a regular working day.
+function isWeekOff(date: Date) {
+  return date.getDay() === 0;
+}
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -177,7 +181,7 @@ function PunchDataTab({ employeeCode }: { employeeCode: string }) {
   const rows = monthDays.map((day) => {
     const key = format(day, "yyyy-MM-dd");
     const punch = punchMap.get(key);
-    const isWeekendDay = isWeekend(day);
+    const isWeekendDay = isWeekOff(day);
     const isFutureDay = isFuture(day);
     const holidayName = holidayMap.get(key);
     const isHolidayDay = !isFutureDay && !!holidayName;
@@ -353,7 +357,7 @@ function TimesheetComplianceTab({ employeeCode }: { employeeCode: string }) {
     [month]
   );
 
-  const workingDays = allDaysInMonth.filter((d) => !isWeekend(d) && !isFuture(d));
+  const workingDays = allDaysInMonth.filter((d) => !isWeekOff(d) && !isFuture(d));
   const leaveDays = workingDays.filter((d) => isOnLeave(d));
   const trackedDays = workingDays.filter((d) => !isOnLeave(d));
   const submittedCount = trackedDays.filter((d) =>
@@ -365,7 +369,7 @@ function TimesheetComplianceTab({ employeeCode }: { employeeCode: string }) {
     : 0;
 
   const dayStatus = (d: Date): "submitted" | "missing" | "leave" | "none" => {
-    if (isWeekend(d) || isFuture(d)) return "none";
+    if (isWeekOff(d) || isFuture(d)) return "none";
     if (isOnLeave(d)) return "leave";
     return submittedDates.has(format(d, "yyyy-MM-dd")) ? "submitted" : "missing";
   };
