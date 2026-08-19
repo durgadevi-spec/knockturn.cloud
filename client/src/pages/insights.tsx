@@ -343,6 +343,12 @@ function TimesheetComplianceTab({ employeeCode }: { employeeCode: string }) {
     ],
   });
 
+  const { data: holidayData } = useQuery({
+    queryKey: [`/api/insights/holidays?year=${year}&month=${monthNum}`],
+  });
+
+  const holidays: Array<{ date: string; name: string }> = (holidayData as any)?.holidays ?? [];
+
   const submittedDates = useMemo(
     () =>
       new Set(
@@ -377,7 +383,23 @@ function TimesheetComplianceTab({ employeeCode }: { employeeCode: string }) {
     [month]
   );
 
-  const workingDays = allDaysInMonth.filter((d) => !isWeekOff(d) && !isFuture(d));
+  // Same fixed-national-holiday fallback + API holiday merge used in the
+  // Punch Data tab, so holidays are treated consistently across tabs.
+  const holidayMap = useMemo(() => {
+    const map = new Map<string, string>();
+    allDaysInMonth.forEach((day) => {
+      const name = FIXED_NATIONAL_HOLIDAYS[format(day, "MM-dd")];
+      if (name) map.set(format(day, "yyyy-MM-dd"), name);
+    });
+    holidays.forEach((h) => {
+      map.set(format(new Date(h.date), "yyyy-MM-dd"), h.name);
+    });
+    return map;
+  }, [holidays, allDaysInMonth]);
+
+  const isHoliday = (d: Date) => holidayMap.has(format(d, "yyyy-MM-dd"));
+
+  const workingDays = allDaysInMonth.filter((d) => !isWeekOff(d) && !isFuture(d) && !isHoliday(d));
   const leaveDays = workingDays.filter((d) => isOnLeave(d));
   const trackedDays = workingDays.filter((d) => !isOnLeave(d));
   const submittedCount = trackedDays.filter((d) =>
@@ -388,8 +410,10 @@ function TimesheetComplianceTab({ employeeCode }: { employeeCode: string }) {
     ? Math.round((submittedCount / trackedDays.length) * 100)
     : 0;
 
-  const dayStatus = (d: Date): "submitted" | "missing" | "leave" | "none" => {
-    if (isWeekOff(d) || isFuture(d)) return "none";
+  const dayStatus = (d: Date): "submitted" | "missing" | "leave" | "holiday" | "none" => {
+    if (isFuture(d)) return "none";
+    if (isHoliday(d)) return "holiday";
+    if (isWeekOff(d)) return "none";
     if (isOnLeave(d)) return "leave";
     return submittedDates.has(format(d, "yyyy-MM-dd")) ? "submitted" : "missing";
   };
@@ -398,6 +422,7 @@ function TimesheetComplianceTab({ employeeCode }: { employeeCode: string }) {
     submitted: "bg-emerald-500",
     missing: "bg-red-500",
     leave: "bg-amber-500",
+    holiday: "bg-purple-500",
     none: "",
   };
 
@@ -483,6 +508,9 @@ function TimesheetComplianceTab({ employeeCode }: { employeeCode: string }) {
                 </span>
                 <span className="flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-amber-500" /> Leave
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-purple-500" /> Holiday
                 </span>
               </div>
             </div>
