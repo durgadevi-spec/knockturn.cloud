@@ -22,7 +22,9 @@ function makePool(url: string | undefined): Pool | null {
 export const hrmsPool = makePool(process.env.HRMS_DB_URL);
 
 // TimeStrap — punch in/out records + timesheet submissions.
-export const timestrapPool = makePool(process.env.TIMESTRAP_DB_URL);
+export const timestrapPool = makePool(
+  process.env.TIMESTRAP_DATABASE_URL ?? process.env.TIMESTRAP_DB_URL
+);
 
 // Payroll — tracks punch in/out (attendance_logs) and is the real source
 // for both the Punch Data and Timesheet Compliance tabs. Confirmed via
@@ -35,6 +37,11 @@ export const projectsPool = makePool(process.env.PROJECTS_DB_URL);
 // LMS — leaves & permissions.
 export const lmsPool = makePool(process.env.LMS_DATABASE_URL);
 
+// TimeGuard — employee monitoring accounts.
+export const timeguardPool = makePool(process.env.TIMEGUARD_DB_URL);
+
+// Knockturn portal database — the login and admin employee registry.
+export const primaryPool = makePool(process.env.DATABASE_URL);
 export function requirePool(pool: Pool | null, label: string): Pool {
   if (!pool) {
     throw Object.assign(

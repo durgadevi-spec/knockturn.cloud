@@ -143,3 +143,31 @@ If the seed script fails:
 3. Implement JWT tokens for session management
 4. Add password reset functionality
 5. Implement rate limiting on login attempts
+
+## Central Employee Provisioning
+
+The admin App Access page now includes Add employee to all systems and a
+delete action. TimeGuard is currently excluded from this workflow. Configure
+these four connection strings before using the controls:
+
+```bash
+DATABASE_URL=postgresql://...
+TIMESTRAP_DB_URL=postgresql://...
+PROJECTS_DB_URL=postgresql://...
+LMS_DATABASE_URL=postgresql://...
+```
+
+Creation refuses to begin if a required database is unavailable and rejects an
+employee code already present in a target system. Each database write uses a
+local transaction; if a later system fails, earlier new rows are compensated.
+Because PostgreSQL cannot provide one transaction across separate databases,
+operators should verify all four records after a failed request.
+
+The provisioning operation creates the required LMS `employees` row as well as
+the LMS login row. It also creates the selected department in the TimeStrap and
+PMS department catalogs when it does not already exist; existing departments
+are reused.
+
+Delete removes account rows and portal app-access overrides. It can be blocked
+by foreign keys from historical records; that is intentional so existing
+attendance, projects, leave, or monitoring data is not silently destroyed.

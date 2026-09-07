@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import {
   format,
   startOfMonth,
@@ -1029,20 +1029,18 @@ export default function Insights() {
               ))}
             </TabsList>
 
-            <AnimatePresence mode="wait">
-              <TabsContent value="punches">
+            <TabsContent value="punches">
                 <PunchDataTab employeeCode={user.employeeCode} />
-              </TabsContent>
-              <TabsContent value="timesheet">
+            </TabsContent>
+            <TabsContent value="timesheet">
                 <TimesheetComplianceTab employeeCode={user.employeeCode} />
-              </TabsContent>
-              <TabsContent value="projects">
+            </TabsContent>
+            <TabsContent value="projects">
                 <ProjectsTab employeeCode={user.employeeCode} />
-              </TabsContent>
-              <TabsContent value="leaves">
+            </TabsContent>
+            <TabsContent value="leaves">
                 <LeavesTab employeeCode={user.employeeCode} />
-              </TabsContent>
-            </AnimatePresence>
+            </TabsContent>
           </Tabs>
         </motion.div>
       </main>

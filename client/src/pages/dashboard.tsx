@@ -582,7 +582,7 @@ export default function Dashboard() {
               <div className="flex flex-col sm:flex-row items-center sm:items-start lg:items-center gap-4 text-center sm:text-left w-full">
                 <div className="w-24 h-24 shrink-0 lg:w-28 lg:h-28">
                   <img
-                    src="/illustration1.jpg?v=1"
+                    src="/office-worker-animation.svg"
                     alt="Welcome"
                     className="w-full h-full object-contain mix-blend-multiply"
                   />

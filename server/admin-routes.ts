@@ -2,6 +2,7 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { z } from "zod";
 import { storage } from "./storage";
 import { APP_CATALOG, isAppAllowedByDefault } from "@shared/app-catalog";
+import { deleteEmployeeEverywhere, provisionEmployee } from "./employee-provisioning";
 
 // The app has no session/auth tokens today (login just returns the
 // employee record to the client, which the client trusts). To keep this
@@ -90,6 +91,43 @@ export function registerAdminRoutes(app: Express) {
         employeeId: z.string().min(1),
         appId: z.string().min(1),
         granted: z.boolean(),
+    });
+
+    const employeeSchema = z.object({
+        name: z.string().trim().min(1),
+        employeeCode: z.string().trim().min(1).max(50),
+        password: z.string().min(1),
+        role: z.enum(["employee", "hr", "admin"]),
+        email: z.string().trim().email().optional().or(z.literal("")),
+        department: z.string().trim().max(120).optional(),
+    });
+
+    app.post("/api/admin/employees", requireAdmin, async (req, res) => {
+        try {
+            const parsed = employeeSchema.safeParse(req.body);
+            if (!parsed.success) {
+                return res.status(400).json({ error: "Invalid employee details", details: parsed.error.errors });
+            }
+            const result = await provisionEmployee(parsed.data);
+            res.status(201).json({ success: true, employee: result });
+        } catch (error: any) {
+            console.error("Error provisioning employee:", error);
+            res.status(error.status || (error.code === "23505" ? 409 : 500)).json({
+                error: error.code === "23505"
+                    ? "An employee with one of these details already exists in a connected system"
+                    : error.message || "Failed to add employee",
+            });
+        }
+    });
+
+    app.delete("/api/admin/employees/:employeeCode", requireAdmin, async (req, res) => {
+        try {
+            const result = await deleteEmployeeEverywhere(req.params.employeeCode);
+            res.json({ success: true, employee: result });
+        } catch (error: any) {
+            console.error("Error deleting employee everywhere:", error);
+            res.status(error.status || 500).json({ error: error.message || "Failed to delete employee" });
+        }
     });
 
     // Grant or revoke a single employee's access to a single app.

@@ -1,5 +1,5 @@
 import type { Express } from "express";
-import { payrollPool, projectsPool, lmsPool, requirePool, timestrapPool, hrmsPool } from "./insights-db";
+import { payrollPool, projectsPool, lmsPool, requirePool, timestrapPool, hrmsPool, primaryPool } from "./insights-db";
 
 /* ============================================================================
  * SCHEMA CONFIG — confirmed against real schema dumps (Aug 2026).
@@ -155,7 +155,7 @@ export function registerInsightsRoutes(app: Express) {
       const pool = requirePool(projectsPool, "PMS database");
 
       const result = await pool.query(
-        `SELECT DISTINCT p.id, p.title AS name, p.status, p.start_date, p.end_date AS due_date, p.progress
+        `SELECT DISTINCT p.id, p.title, p.project_code, p.client_name, p.status, p.start_date, p.end_date, p.progress
          FROM projects p
          LEFT JOIN project_team_members ptm ON ptm.project_id = p.id
          LEFT JOIN project_departments pd ON pd.project_id = p.id
@@ -186,12 +186,20 @@ export function registerInsightsRoutes(app: Express) {
       const pool = requirePool(lmsPool, "LMS database");
       const y = parseInt(year) || new Date().getFullYear();
 
-      const hrms = requirePool(hrmsPool, "HRMS database");
-      const empNameResult = await hrms.query(
-        `SELECT CONCAT(first_name, ' ', last_name) AS name FROM employees WHERE UPPER(employee_id) = UPPER($1) LIMIT 1`,
+      const primary = requirePool(primaryPool, "primary database");
+      const portalUserResult = await primary.query(
+        `SELECT username FROM employees WHERE UPPER(employee_code) = UPPER($1) LIMIT 1`,
         [employeeCode]
       );
-      const empName = empNameResult.rows[0]?.name || employeeCode;
+      let empName = portalUserResult.rows[0]?.username;
+      if (!empName) {
+        const hrms = requirePool(hrmsPool, "HRMS database");
+        const empNameResult = await hrms.query(
+          `SELECT CONCAT(first_name, ' ', last_name) AS name FROM employees WHERE UPPER(employee_id) = UPPER($1) LIMIT 1`,
+          [employeeCode]
+        );
+        empName = empNameResult.rows[0]?.name || employeeCode;
+      }
 
       const result = await pool.query(
         `SELECT 'L-' || l.id AS id, (l.leave_type || ' Leave') AS type,
