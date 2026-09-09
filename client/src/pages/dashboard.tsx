@@ -165,7 +165,7 @@ const QUICK_LINKS: QuickLink[] = [
     title: "Company Policy",
     description: "Read and stay updated with CTI's official company policies",
     icon: BookOpen,
-    url: "http://82.25.109.136:5005/",
+    url: "http://147.93.28.144:5013/",
     color: "from-amber-400 via-orange-500 to-rose-500",
     bgColor: "bg-amber-50",
     iconColor: "text-amber-600",
