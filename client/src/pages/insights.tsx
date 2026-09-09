@@ -1,22 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   format,
   startOfMonth,
   endOfMonth,
   eachDayOfInterval,
   isSameDay,
+  isSunday,
   isFuture,
   addMonths,
   subMonths,
 } from "date-fns";
-
-// Only Sunday is the weekly off — Saturday is a regular working day.
-function isWeekOff(date: Date) {
-  return date.getDay() === 0;
-}
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -112,13 +108,6 @@ function MonthSwitcher({
 /* Tab 1 — Punch Data                                                      */
 /* ---------------------------------------------------------------------- */
 
-// Fixed-date Indian national holidays (same date every year). Keyed by "MM-dd".
-const FIXED_NATIONAL_HOLIDAYS: Record<string, string> = {
-  "01-26": "Republic Day",
-  "08-15": "Independence Day",
-  "10-02": "Gandhi Jayanti",
-};
-
 function PunchDataTab({ employeeCode }: { employeeCode: string }) {
   const [month, setMonth] = useState(new Date());
   const year = month.getFullYear();
@@ -128,23 +117,23 @@ function PunchDataTab({ employeeCode }: { employeeCode: string }) {
     queryKey: [`/api/insights/punches?employeeCode=${employeeCode}&year=${year}&month=${monthNum}`],
   });
 
-  const { data: holidayData } = useQuery({
-    queryKey: [`/api/insights/holidays?year=${year}&month=${monthNum}`],
-  });
-
-  // Same endpoint/query key the Timesheet Compliance tab uses for leaveRanges,
-  // so both tabs show identical leave days and share the query cache.
-  const { data: timesheetData } = useQuery({
-    queryKey: [`/api/insights/timesheet-status?employeeCode=${employeeCode}&year=${year}&month=${monthNum}`],
-  });
-
   const punches: Array<{ work_date: string; punch_in: string | null; punch_out: string | null }> =
     (data as any)?.punches ?? [];
 
-  const holidays: Array<{ date: string; name: string }> = (holidayData as any)?.holidays ?? [];
+  const odRanges: Array<{ start_date: string; end_date: string }> =
+    (data as any)?.odRanges ?? [];
 
-  const leaveRanges: Array<{ start_date: string; end_date: string }> =
-    (timesheetData as any)?.leaveRanges ?? [];
+  // Build a set of OD dates for quick lookup
+  const odDates = useMemo(() => {
+    const s = new Set<string>();
+    odRanges.forEach((r) => {
+      const start = new Date(r.start_date);
+      const end = new Date(r.end_date);
+      const days = eachDayOfInterval({ start, end });
+      days.forEach((d) => s.add(format(d, "yyyy-MM-dd")));
+    });
+    return s;
+  }, [odRanges]);
 
   const punchMap = useMemo(
     () => new Map(punches.map((p) => [format(new Date(p.work_date), "yyyy-MM-dd"), p])),
@@ -156,46 +145,13 @@ function PunchDataTab({ employeeCode }: { employeeCode: string }) {
     [month]
   );
 
-  // Expand each approved leave range into "yyyy-MM-dd" calendar dates rather
-  // than comparing raw timestamps, so an approved LMS leave day is never
-  // mislabeled as "Missing" here due to a timezone edge case.
-  const leaveDateSet = useMemo(() => {
-    const set = new Set<string>();
-    leaveRanges.forEach((r) => {
-      const start = new Date(r.start_date);
-      const end = new Date(r.end_date);
-      if (isNaN(start.getTime()) || isNaN(end.getTime())) return;
-      eachDayOfInterval({ start, end }).forEach((d) => set.add(format(d, "yyyy-MM-dd")));
-    });
-    return set;
-  }, [leaveRanges]);
-
-  const isOnLeave = (d: Date) => leaveDateSet.has(format(d, "yyyy-MM-dd"));
-
-  // Fixed-date Indian national holidays, used as a fallback so these always
-  // show correctly even if the backend /api/insights/holidays route has no
-  // data yet. Any date the API does return for will override these.
-  const holidayMap = useMemo(() => {
-    const map = new Map<string, string>();
-    monthDays.forEach((day) => {
-      const name = FIXED_NATIONAL_HOLIDAYS[format(day, "MM-dd")];
-      if (name) map.set(format(day, "yyyy-MM-dd"), name);
-    });
-    holidays.forEach((h) => {
-      map.set(format(new Date(h.date), "yyyy-MM-dd"), h.name);
-    });
-    return map;
-  }, [holidays, monthDays]);
-
   const rows = monthDays.map((day) => {
     const key = format(day, "yyyy-MM-dd");
     const punch = punchMap.get(key);
-    const isWeekendDay = isWeekOff(day);
+    const isRestDay = isSunday(day);
     const isFutureDay = isFuture(day);
-    const holidayName = holidayMap.get(key);
-    const isHolidayDay = !isFutureDay && !!holidayName;
-    const isLeaveDay = !isFutureDay && !isHolidayDay && isOnLeave(day);
-    const isMissingDay = !isFutureDay && !isHolidayDay && !isWeekendDay && !isLeaveDay && !punch;
+    const isODDay = odDates.has(key);
+    const isLeaveDay = !isFutureDay && !punch && !isRestDay && !isODDay;
     const outHours =
       punch && punch.punch_in && punch.punch_out
         ? ((new Date(punch.punch_out).getTime() - new Date(punch.punch_in).getTime()) / 3_600_000).toFixed(1)
@@ -205,11 +161,9 @@ function PunchDataTab({ employeeCode }: { employeeCode: string }) {
       date: day,
       key,
       punch,
-      isWeekendDay,
+      isRestDay,
       isLeaveDay,
-      isMissingDay,
-      isHolidayDay,
-      holidayName,
+      isODDay,
       isFutureDay,
       hours: outHours,
     };
@@ -217,18 +171,28 @@ function PunchDataTab({ employeeCode }: { employeeCode: string }) {
 
   return (
     <Card className="overflow-hidden border border-[#e6e4f2] bg-white shadow-[0_1px_2px_rgba(38,33,92,0.04),0_8px_24px_rgba(38,33,92,0.06)]">
-      <div className="flex items-center justify-between gap-4 border-b border-[#edf1f8] bg-[#fdfdff] px-5 py-4">
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#edf3ff] text-[#4f73d5] shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]">
-            <Clock className="h-4 w-4" />
+      <div className="flex items-center justify-between gap-4 border-b border-[#edf1f8] bg-[#fdfdff] px-5 py-2">
+        <div className="flex items-center gap-4">
+          <div className="hidden lg:flex w-[80px] shrink-0 opacity-90 mix-blend-multiply">
+            <img src="/punch-in.jpg" alt="Punch In" className="w-full object-contain" />
           </div>
-          <div>
-            <div className="text-[15px] font-extrabold tracking-[-0.02em] text-[#1a1c2a]">Punch In / Out History</div>
-            <div className="text-[12px] font-medium text-[#8d8da6]">Daily attendance from TimeStrap</div>
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#edf3ff] text-[#4f73d5] shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]">
+              <Clock className="h-4 w-4" />
+            </div>
+            <div>
+              <div className="text-[15px] font-extrabold tracking-[-0.02em] text-[#1a1c2a]">Punch In / Out History</div>
+              <div className="text-[12px] font-medium text-[#8d8da6]">Daily attendance from TimeStrap</div>
+            </div>
           </div>
         </div>
 
-        <MonthSwitcher month={month} onChange={setMonth} />
+        <div className="flex items-center gap-4">
+          <MonthSwitcher month={month} onChange={setMonth} />
+          <div className="hidden lg:flex w-[80px] shrink-0 opacity-90 mix-blend-multiply">
+            <img src="/punch-out.jpg" alt="Punch Out" className="w-full object-contain" />
+          </div>
+        </div>
       </div>
       <CardContent className="p-0">
         {isLoading && (
@@ -267,58 +231,42 @@ function PunchDataTab({ employeeCode }: { employeeCode: string }) {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {rows.map(
-                  ({ key, date, punch, isWeekendDay, isLeaveDay, isMissingDay, isHolidayDay, holidayName, isFutureDay, hours }) => {
-                    const statusColor = isHolidayDay
-                      ? "bg-[#a26df0]"
-                      : isLeaveDay
-                        ? "bg-[#f4b740]"
-                        : isMissingDay
-                          ? "bg-[#e2685c]"
-                          : isWeekendDay
-                            ? "bg-[#9ea8c1]"
-                            : isFutureDay
-                              ? "bg-[#edf1f8]"
-                              : "bg-[#20b286]";
+                {rows.map(({ key, date, punch, isRestDay, isLeaveDay, isODDay, isFutureDay, hours }) => {
+                  const statusColor = isODDay ? "bg-[#3b82f6]" : isLeaveDay ? "bg-[#f4b740]" : isRestDay ? "bg-[#9ea8c1]" : isFutureDay ? "bg-[#edf1f8]" : "bg-[#20b286]";
 
-                    return (
-                      <TableRow key={key} data-testid={`row-punch-${key}`}>
-                        <TableCell className="pl-4 font-semibold text-[#2d2b41]">
-                          <div className="flex items-center gap-2">
-                            <span className={`h-2.5 w-2.5 rounded-full ${statusColor}`} />
-                            <span>{format(date, "EEE, dd MMM")}</span>
-                            {isHolidayDay || isWeekendDay || isLeaveDay || isMissingDay ? (
-                              <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#7e849d]">
-                                {isHolidayDay
-                                  ? holidayName || "Holiday"
-                                  : isLeaveDay
-                                    ? "Leave"
-                                    : isMissingDay
-                                      ? "Missing"
-                                      : isWeekendDay
-                                        ? format(date, "EEE").toUpperCase()
-                                        : ""}
-                              </span>
-                            ) : null}
-                          </div>
-                        </TableCell>
-                        <TableCell className="pl-3">
-                          <span className="inline-flex items-center gap-2 font-medium text-[#3b4259]">
-                            <span className={`h-2.5 w-2.5 rounded-full ${punch?.punch_in ? "bg-[#20b286]" : "bg-[#dfe3ee]"}`} />
-                            {punch?.punch_in ? format(new Date(punch.punch_in.replace("Z", "")), "hh:mm a") : "—"}
-                          </span>
-                        </TableCell>
-                        <TableCell className="pl-3">
-                          <span className="inline-flex items-center gap-2 font-medium text-[#3b4259]">
-                            <span className={`h-2.5 w-2.5 rounded-full ${punch?.punch_out ? "bg-[#d8573f]" : "bg-[#dfe3ee]"}`} />
-                            {punch?.punch_out ? format(new Date(punch.punch_out.replace("Z", "")), "hh:mm a") : "—"}
-                          </span>
-                        </TableCell>
-                        <TableCell className="pr-4 text-right font-bold text-[#2d2b41]">{hours}</TableCell>
-                      </TableRow>
-                    );
-                  }
-                )}
+                  return (
+                    <TableRow key={key} data-testid={`row-punch-${key}`}>
+                      <TableCell className="pl-4 font-semibold text-[#2d2b41]">
+                        <div className="flex items-center gap-2">
+                          <span className={`h-2.5 w-2.5 rounded-full ${statusColor}`} />
+                          <span>{format(date, "EEE, dd MMM")}</span>
+                          {isODDay ? (
+                            <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#3b82f6]">
+                              OD
+                            </span>
+                          ) : isRestDay || (isLeaveDay && !isFutureDay) ? (
+                            <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#7e849d]">
+                              {isLeaveDay ? "Leave" : isRestDay ? format(date, "EEE") : ""}
+                            </span>
+                          ) : null}
+                        </div>
+                      </TableCell>
+                      <TableCell className="pl-3">
+                        <span className="inline-flex items-center gap-2 font-medium text-[#3b4259]">
+                          <span className={`h-2.5 w-2.5 rounded-full ${punch?.punch_in ? "bg-[#20b286]" : "bg-[#dfe3ee]"}`} />
+                          {punch?.punch_in ? format(new Date(punch.punch_in.replace('Z', '')), "hh:mm a") : "—"}
+                        </span>
+                      </TableCell>
+                      <TableCell className="pl-3">
+                        <span className="inline-flex items-center gap-2 font-medium text-[#3b4259]">
+                          <span className={`h-2.5 w-2.5 rounded-full ${punch?.punch_out ? "bg-[#d8573f]" : "bg-[#dfe3ee]"}`} />
+                          {punch?.punch_out ? format(new Date(punch.punch_out.replace('Z', '')), "hh:mm a") : "—"}
+                        </span>
+                      </TableCell>
+                      <TableCell className="pr-4 text-right font-bold text-[#2d2b41]">{hours}</TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           </div>
@@ -343,12 +291,6 @@ function TimesheetComplianceTab({ employeeCode }: { employeeCode: string }) {
     ],
   });
 
-  const { data: holidayData } = useQuery({
-    queryKey: [`/api/insights/holidays?year=${year}&month=${monthNum}`],
-  });
-
-  const holidays: Array<{ date: string; name: string }> = (holidayData as any)?.holidays ?? [];
-
   const submittedDates = useMemo(
     () =>
       new Set(
@@ -360,46 +302,27 @@ function TimesheetComplianceTab({ employeeCode }: { employeeCode: string }) {
   const leaveRanges: Array<{ start_date: string; end_date: string }> =
     (data as any)?.leaveRanges ?? [];
 
-  // Expand each approved leave range into a set of "yyyy-MM-dd" calendar
-  // dates, instead of comparing raw timestamps. Comparing getTime() directly
-  // against a UTC-parsed date string can shift by several hours in IST and
-  // silently drop the first/last day of a leave range, wrongly showing an
-  // approved leave day as "missing".
-  const leaveDateSet = useMemo(() => {
-    const set = new Set<string>();
-    leaveRanges.forEach((r) => {
-      const start = new Date(r.start_date);
-      const end = new Date(r.end_date);
-      if (isNaN(start.getTime()) || isNaN(end.getTime())) return;
-      eachDayOfInterval({ start, end }).forEach((d) => set.add(format(d, "yyyy-MM-dd")));
+  const isOnLeave = (d: Date) => {
+    // Compare calendar dates as yyyy-MM-dd strings, not raw timestamps.
+    // Leave dates come back from the DB as UTC-midnight values, while `d`
+    // is built at local midnight — in timezones ahead of UTC (e.g. IST)
+    // that made local midnight earlier than UTC midnight for the same
+    // calendar day, so a leave day's own start date could evaluate as
+    // "before" the leave range and incorrectly fall through to "missing".
+    const day = format(d, "yyyy-MM-dd");
+    return leaveRanges.some((r) => {
+      const start = String(r.start_date).slice(0, 10);
+      const end = String(r.end_date).slice(0, 10);
+      return day >= start && day <= end;
     });
-    return set;
-  }, [leaveRanges]);
-
-  const isOnLeave = (d: Date) => leaveDateSet.has(format(d, "yyyy-MM-dd"));
+  };
 
   const allDaysInMonth = useMemo(
     () => eachDayOfInterval({ start: startOfMonth(month), end: endOfMonth(month) }),
     [month]
   );
 
-  // Same fixed-national-holiday fallback + API holiday merge used in the
-  // Punch Data tab, so holidays are treated consistently across tabs.
-  const holidayMap = useMemo(() => {
-    const map = new Map<string, string>();
-    allDaysInMonth.forEach((day) => {
-      const name = FIXED_NATIONAL_HOLIDAYS[format(day, "MM-dd")];
-      if (name) map.set(format(day, "yyyy-MM-dd"), name);
-    });
-    holidays.forEach((h) => {
-      map.set(format(new Date(h.date), "yyyy-MM-dd"), h.name);
-    });
-    return map;
-  }, [holidays, allDaysInMonth]);
-
-  const isHoliday = (d: Date) => holidayMap.has(format(d, "yyyy-MM-dd"));
-
-  const workingDays = allDaysInMonth.filter((d) => !isWeekOff(d) && !isFuture(d) && !isHoliday(d));
+  const workingDays = allDaysInMonth.filter((d) => !isSunday(d) && !isFuture(d));
   const leaveDays = workingDays.filter((d) => isOnLeave(d));
   const trackedDays = workingDays.filter((d) => !isOnLeave(d));
   const submittedCount = trackedDays.filter((d) =>
@@ -410,10 +333,8 @@ function TimesheetComplianceTab({ employeeCode }: { employeeCode: string }) {
     ? Math.round((submittedCount / trackedDays.length) * 100)
     : 0;
 
-  const dayStatus = (d: Date): "submitted" | "missing" | "leave" | "holiday" | "none" => {
-    if (isFuture(d)) return "none";
-    if (isHoliday(d)) return "holiday";
-    if (isWeekOff(d)) return "none";
+  const dayStatus = (d: Date): "submitted" | "missing" | "leave" | "none" => {
+    if (isSunday(d) || isFuture(d)) return "none";
     if (isOnLeave(d)) return "leave";
     return submittedDates.has(format(d, "yyyy-MM-dd")) ? "submitted" : "missing";
   };
@@ -422,7 +343,6 @@ function TimesheetComplianceTab({ employeeCode }: { employeeCode: string }) {
     submitted: "bg-emerald-500",
     missing: "bg-red-500",
     leave: "bg-amber-500",
-    holiday: "bg-purple-500",
     none: "",
   };
 
@@ -509,9 +429,6 @@ function TimesheetComplianceTab({ employeeCode }: { employeeCode: string }) {
                 <span className="flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-amber-500" /> Leave
                 </span>
-                <span className="flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-purple-500" /> Holiday
-                </span>
               </div>
             </div>
 
@@ -583,22 +500,14 @@ function TimesheetComplianceTab({ employeeCode }: { employeeCode: string }) {
 /* ---------------------------------------------------------------------- */
 
 const STATUS_STYLES: Record<string, string> = {
-  planned: "bg-slate-50 text-slate-700 border-slate-200",
-  Planned: "bg-slate-50 text-slate-700 border-slate-200",
   pending: "bg-amber-50 text-amber-700 border-amber-200",
   in_progress: "bg-blue-50 text-blue-700 border-blue-200",
   "in-progress": "bg-blue-50 text-blue-700 border-blue-200",
-  "In Progress": "bg-blue-50 text-blue-700 border-blue-200",
-  "on_hold": "bg-amber-50 text-amber-700 border-amber-200",
-  "On Hold": "bg-amber-50 text-amber-700 border-amber-200",
   overdue: "bg-red-50 text-red-700 border-red-200",
   review: "bg-purple-50 text-purple-700 border-purple-200",
   completed: "bg-emerald-50 text-emerald-700 border-emerald-200",
-  Completed: "bg-emerald-50 text-emerald-700 border-emerald-200",
   done: "bg-emerald-50 text-emerald-700 border-emerald-200",
   closed: "bg-emerald-50 text-emerald-700 border-emerald-200",
-  cancelled: "bg-red-50 text-red-700 border-red-200",
-  Cancelled: "bg-red-50 text-red-700 border-red-200",
 };
 
 const PROJECT_STATUS_TABS = [
@@ -625,14 +534,14 @@ function ProjectsTab({ employeeCode }: { employeeCode: string }) {
   });
 
   const allProjects: Array<{
-    id: string;
+    id: string | number;
     title: string;
-    project_code: string;
-    client_name: string | null;
+    project_code?: string | null;
+    client_name?: string | null;
     status: string;
-    start_date: string;
-    end_date: string;
-    progress: number;
+    start_date?: string | null;
+    end_date?: string | null;
+    progress: number | null;
   }> = (data as any)?.projects ?? [];
 
   const projects = useMemo(() => {
@@ -660,32 +569,41 @@ function ProjectsTab({ employeeCode }: { employeeCode: string }) {
         </div>
       </CardHeader>
 
-      <div className="px-6 pb-3 flex items-center gap-3 flex-wrap">
-        <div className="inline-flex items-center gap-1 rounded-xl border border-[#e6e4f2] bg-[#fafaff] p-1">
-          {PROJECT_STATUS_TABS.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => setStatusFilter(t.id)}
-              data-testid={`filter-project-status-${t.id}`}
-              className={`rounded-lg px-4 py-1.5 text-[12px] font-bold transition-all ${statusFilter === t.id
-                ? "bg-gradient-to-br from-[#7f77dd] to-[#3c3489] text-white shadow-[0_4px_10px_rgba(83,74,183,0.3)]"
-                : "text-[#65637e] hover:bg-[#eeedfe] hover:text-[#3c3489]"
-                }`}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
+      <div className="relative px-6 pb-3 flex items-end justify-between gap-4">
+        <div className="flex items-center gap-3 flex-wrap flex-1 pr-[130px]">
+          <div className="inline-flex items-center gap-1 rounded-xl border border-[#e6e4f2] bg-[#fafaff] p-1">
+            {PROJECT_STATUS_TABS.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => setStatusFilter(t.id)}
+                data-testid={`filter-project-status-${t.id}`}
+                className={`rounded-lg px-4 py-1.5 text-[12px] font-bold transition-all ${statusFilter === t.id
+                  ? "bg-gradient-to-br from-[#7f77dd] to-[#3c3489] text-white shadow-[0_4px_10px_rgba(83,74,183,0.3)]"
+                  : "text-[#65637e] hover:bg-[#eeedfe] hover:text-[#3c3489]"
+                  }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
 
-        <div className="relative flex-1 min-w-[200px] max-w-sm">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by project, code, or client…"
-            className="pl-9 h-9"
-            data-testid="input-search-projects"
+          <div className="relative flex-1 min-w-[200px] max-w-sm">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search projects…"
+              className="pl-9 h-9"
+              data-testid="input-search-projects"
+            />
+          </div>
+        </div>
+        <div className="hidden lg:block absolute right-6 bottom-3 w-[120px] opacity-85 hover:opacity-100 transition-opacity duration-300 pointer-events-none">
+          <img
+            src="/projects-illustration.jpg"
+            alt="Projects"
+            className="w-full object-contain mix-blend-multiply"
           />
         </div>
       </div>
@@ -728,7 +646,6 @@ function ProjectsTab({ employeeCode }: { employeeCode: string }) {
             <TableHeader>
               <TableRow>
                 <TableHead>Project Name</TableHead>
-                <TableHead>Client</TableHead>
                 <TableHead>Start Date</TableHead>
                 <TableHead>End Date</TableHead>
                 <TableHead>Progress</TableHead>
@@ -740,9 +657,10 @@ function ProjectsTab({ employeeCode }: { employeeCode: string }) {
                 <TableRow key={p.id} data-testid={`row-project-${p.id}`}>
                   <TableCell className="font-medium text-foreground">
                     <div>{p.title}</div>
-                    <div className="text-[11px] text-muted-foreground font-normal">{p.project_code}</div>
+                    {p.project_code && (
+                      <div className="text-[11px] text-muted-foreground font-normal">{p.project_code}</div>
+                    )}
                   </TableCell>
-                  <TableCell className="text-muted-foreground">{p.client_name || "—"}</TableCell>
                   <TableCell className="text-muted-foreground">
                     {p.start_date ? format(new Date(p.start_date), "dd MMM yyyy") : "—"}
                   </TableCell>
@@ -764,7 +682,7 @@ function ProjectsTab({ employeeCode }: { employeeCode: string }) {
                       variant="outline"
                       className={`text-[10px] uppercase ${STATUS_STYLES[p.status] || "bg-muted"}`}
                     >
-                      {p.status}
+                      {p.status?.replace("_", " ")}
                     </Badge>
                   </TableCell>
                 </TableRow>
@@ -788,6 +706,7 @@ const LEAVE_STATUS_STYLES: Record<string, string> = {
 };
 
 const LEAVE_TYPE_TABS = [
+  { id: "all", label: "All" },
   { id: "leave", label: "Leave" },
   { id: "od", label: "OD" },
   { id: "permission", label: "Permission" },
@@ -804,7 +723,7 @@ function classifyLeaveType(type: string): LeaveTypeFilter {
 
 function LeavesTab({ employeeCode }: { employeeCode: string }) {
   const [month, setMonth] = useState(new Date());
-  const [typeFilter, setTypeFilter] = useState<LeaveTypeFilter>("leave");
+  const [typeFilter, setTypeFilter] = useState<LeaveTypeFilter>("all");
   const year = month.getFullYear();
   const monthNum = month.getMonth() + 1;
 
@@ -831,7 +750,9 @@ function LeavesTab({ employeeCode }: { employeeCode: string }) {
   );
 
   const leaves = useMemo(
-    () => monthLeaves.filter((l) => classifyLeaveType(l.type) === typeFilter),
+    () => typeFilter === "all"
+      ? monthLeaves
+      : monthLeaves.filter((l) => classifyLeaveType(l.type) === typeFilter),
     [monthLeaves, typeFilter]
   );
 
@@ -847,7 +768,12 @@ function LeavesTab({ employeeCode }: { employeeCode: string }) {
             <p className="text-xs text-muted-foreground">History from the Leave Management System</p>
           </div>
         </div>
-        <MonthSwitcher month={month} onChange={setMonth} />
+        <div className="flex items-center gap-3">
+          <div className="hidden lg:flex w-[70px] shrink-0 opacity-85 hover:opacity-100 transition-opacity duration-300">
+            <img src="/leaves-illustration.jpg" alt="Leaves" className="w-full object-contain mix-blend-multiply" />
+          </div>
+          <MonthSwitcher month={month} onChange={setMonth} />
+        </div>
       </CardHeader>
 
       <div className="px-6 pb-3">
@@ -1029,18 +955,20 @@ export default function Insights() {
               ))}
             </TabsList>
 
-            <TabsContent value="punches">
+            <AnimatePresence mode="wait">
+              <TabsContent value="punches">
                 <PunchDataTab employeeCode={user.employeeCode} />
-            </TabsContent>
-            <TabsContent value="timesheet">
+              </TabsContent>
+              <TabsContent value="timesheet">
                 <TimesheetComplianceTab employeeCode={user.employeeCode} />
-            </TabsContent>
-            <TabsContent value="projects">
+              </TabsContent>
+              <TabsContent value="projects">
                 <ProjectsTab employeeCode={user.employeeCode} />
-            </TabsContent>
-            <TabsContent value="leaves">
+              </TabsContent>
+              <TabsContent value="leaves">
                 <LeavesTab employeeCode={user.employeeCode} />
-            </TabsContent>
+              </TabsContent>
+            </AnimatePresence>
           </Tabs>
         </motion.div>
       </main>
