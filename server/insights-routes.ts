@@ -44,7 +44,8 @@ export function registerInsightsRoutes(app: Express) {
         [employeeCode, y, m]
       );
 
-      // Fetch approved OD dates from LMS
+      // Fetch approved and pending OD dates from LMS so pending OD does not
+      // create a shortfall before the request is finalized.
       let odRanges: Array<{ start_date: string; end_date: string }> = [];
       try {
         const lms = requirePool(lmsPool, "LMS database");
@@ -64,7 +65,7 @@ export function registerInsightsRoutes(app: Express) {
              OR REPLACE(LOWER(l.employee_name), ' ', '') LIKE '%' || REPLACE(LOWER($1::text), ' ', '') || '%'
              OR REPLACE(LOWER($1::text), ' ', '') LIKE '%' || REPLACE(LOWER(l.employee_name), ' ', '') || '%'
            )
-             AND LOWER(l.status) = 'approved'
+             AND LOWER(l.status) IN ('approved', 'pending')
              AND LOWER(l.leave_type) = 'od'
              AND l.start_date <= (make_date($2, $3, 1) + interval '1 month' - interval '1 day')
              AND l.end_date >= make_date($2, $3, 1)`,
@@ -79,6 +80,50 @@ export function registerInsightsRoutes(app: Express) {
     } catch (error: any) {
       console.error("[insights] punches error:", error.message);
       res.status(error.status || 500).json({ error: error.message || "Failed to load punch data" });
+    }
+  });
+
+  // ---- Permission Balance (LMS: approved and pending monthly permissions) ----
+  app.get("/api/insights/permission-balance", async (req, res) => {
+    try {
+      const { employeeCode, year, month } = req.query as Record<string, string>;
+      if (!employeeCode) return res.status(400).json({ error: "employeeCode is required" });
+
+      const lms = requirePool(lmsPool, "LMS database");
+      const y = parseInt(year) || new Date().getFullYear();
+      const m = parseInt(month) || new Date().getMonth() + 1;
+      const primary = requirePool(primaryPool, "primary database");
+      const portalUserResult = await primary.query(
+        `SELECT username FROM employees WHERE UPPER(employee_code) = UPPER($1) LIMIT 1`,
+        [employeeCode]
+      );
+      let empName = portalUserResult.rows[0]?.username;
+      if (!empName) {
+        const hrms = requirePool(hrmsPool, "HRMS database");
+        const empNameResult = await hrms.query(
+          `SELECT CONCAT(first_name, ' ', last_name) AS name FROM employees WHERE UPPER(employee_id) = UPPER($1) LIMIT 1`,
+          [employeeCode]
+        );
+        empName = empNameResult.rows[0]?.name || employeeCode;
+      }
+
+      const result = await lms.query(
+        `SELECT COALESCE(SUM(p.total_hours), 0) AS permission_hours
+         FROM permissions p
+         WHERE (
+           REGEXP_REPLACE(LOWER(p.username), '[^a-z0-9]', '', 'g') LIKE '%' || REGEXP_REPLACE(LOWER($1::text), '[^a-z0-9]', '', 'g') || '%'
+           OR REGEXP_REPLACE(LOWER($1::text), '[^a-z0-9]', '', 'g') LIKE '%' || REGEXP_REPLACE(LOWER(p.username), '[^a-z0-9]', '', 'g') || '%'
+         )
+           AND LOWER(p.status) IN ('approved', 'pending')
+           AND date_part('year', p.permission_date) = $2
+           AND date_part('month', p.permission_date) = $3`,
+        [empName, y, m]
+      );
+
+      res.json({ permissionHours: Number(result.rows[0]?.permission_hours || 0) });
+    } catch (error: any) {
+      console.error("[insights] permission-balance error:", error.message);
+      res.status(error.status || 500).json({ error: error.message || "Failed to load permission balance" });
     }
   });
 

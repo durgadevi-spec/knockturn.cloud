@@ -9,6 +9,7 @@ import {
   eachDayOfInterval,
   isSameDay,
   isSunday,
+  isToday,
   isFuture,
   addMonths,
   subMonths,
@@ -41,6 +42,8 @@ import {
   AlertTriangle,
   CheckCircle2,
   Search,
+  ShieldCheck,
+  TrendingDown,
 } from "lucide-react";
 
 interface User {
@@ -108,6 +111,143 @@ function MonthSwitcher({
 /* Tab 1 — Punch Data                                                      */
 /* ---------------------------------------------------------------------- */
 
+type PunchDayRow = {
+  date: Date;
+  key: string;
+  punch: { work_date: string; punch_in: string | null; punch_out: string | null } | undefined;
+  isRestDay: boolean;
+  isLeaveDay: boolean;
+  isODDay: boolean;
+  isFutureDay: boolean;
+  isToday: boolean;
+  hours: string;
+};
+
+function formatMinutes(minutes: number) {
+  const rounded = Math.max(0, Math.round(minutes));
+  const hours = Math.floor(rounded / 60);
+  const remainingMinutes = rounded % 60;
+  return hours ? `${hours}h ${remainingMinutes.toString().padStart(2, "0")}m` : `${remainingMinutes}m`;
+}
+
+function PermissionBalanceCard({
+  employeeCode,
+  month,
+  rows,
+}: {
+  employeeCode: string;
+  month: Date;
+  rows: PunchDayRow[];
+}) {
+  const year = month.getFullYear();
+  const monthNum = month.getMonth() + 1;
+  const { data, isLoading, isError } = useQuery({
+    queryKey: [`/api/insights/permission-balance?employeeCode=${employeeCode}&year=${year}&month=${monthNum}`],
+  });
+
+  const dailyShortfallMinutes = useMemo(
+    () =>
+      rows.reduce((total, row) => {
+        if (
+          row.isRestDay ||
+          row.isLeaveDay ||
+          row.isODDay ||
+          row.isFutureDay ||
+          row.isToday ||
+          !row.punch?.punch_in ||
+          !row.punch.punch_out
+        ) {
+          return total;
+        }
+        const workedMinutes = Number.parseFloat(row.hours) * 60;
+        if (workedMinutes <= 0) return total;
+        return total + Math.max(0, 9 * 60 - workedMinutes);
+      }, 0),
+    [rows]
+  );
+
+  const approvedPermissionMinutes = Number((data as any)?.permissionHours || 0) * 60;
+  const odDays = rows.filter((row) => row.isODDay && !row.isRestDay && !row.isFutureDay && !row.isToday).length;
+  // Both recorded LMS permission and punch shortfall consume the monthly allowance.
+  const deductedMinutes = approvedPermissionMinutes + dailyShortfallMinutes;
+  const allowanceMinutes = 3 * 60;
+  const remainingMinutes = Math.max(0, allowanceMinutes - deductedMinutes);
+  const exceededMinutes = Math.max(0, deductedMinutes - allowanceMinutes);
+  const allowanceUsed = Math.min(100, (deductedMinutes / allowanceMinutes) * 100);
+
+  return (
+    <Card className="mb-4 overflow-hidden border border-[#e6e4f2] bg-white shadow-[0_1px_2px_rgba(38,33,92,0.04),0_8px_24px_rgba(38,33,92,0.06)]">
+      <CardHeader className="flex flex-row items-center justify-between gap-3 bg-[#fdfdff] px-4 py-2">
+        <div className="flex items-center gap-3">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#eef9f5] text-[#20a478]">
+            <ShieldCheck className="h-4 w-4" />
+          </div>
+          <div>
+            <CardTitle className="text-[14px] font-extrabold text-[#1a1c2a]">Monthly Permission Balance</CardTitle>
+            <p className="text-[11px] font-medium text-[#8d8da6]">3 hours available for daily shortfall</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <img
+            src="/permission.jpg"
+            alt="Permission balance"
+            className="hidden h-12 w-28 rounded-lg object-cover object-bottom sm:block"
+          />
+          <Badge className={exceededMinutes ? "border-red-200 bg-red-50 text-red-700" : "border-emerald-200 bg-emerald-50 text-emerald-700"} variant="outline">
+            {exceededMinutes ? "Hourly deduction" : "Within allowance"}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-2 border-t border-[#edf1f8] px-4 py-2">
+        {isLoading ? (
+          <Skeleton className="h-8 w-full" />
+        ) : (
+          <>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-5">
+              <div>
+                <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#9997ae]">Daily shortfall</p>
+                <p className="text-base font-extrabold text-[#2d2b41]">{formatMinutes(dailyShortfallMinutes)}</p>
+              </div>
+              <div>
+                <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#9997ae]">LMS permission applied</p>
+                <p className="text-base font-extrabold text-[#2d2b41]">{formatMinutes(approvedPermissionMinutes)}</p>
+              </div>
+              <div>
+                <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#9997ae]">Remaining</p>
+                <p className={`text-base font-extrabold ${exceededMinutes ? "text-[#d8573f]" : "text-[#20a478]"}`}>
+                  {formatMinutes(remainingMinutes)}
+                </p>
+              </div>
+              <div>
+                <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#9997ae]">Hourly excess</p>
+                <p className={`text-base font-extrabold ${exceededMinutes ? "text-[#d8573f]" : "text-[#2d2b41]"}`}>
+                  {formatMinutes(exceededMinutes)}
+                </p>
+              </div>
+              <div>
+                <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#9997ae]">OD coverage</p>
+                <p className="text-base font-extrabold text-[#3b82f6]">{odDays} {odDays === 1 ? "day" : "days"}</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="mb-1 flex items-center justify-between text-[10px] font-semibold text-[#65637e]">
+                  <span>Used from 3h allowance</span>
+                  <span>{formatMinutes(Math.min(deductedMinutes, allowanceMinutes))} / 3h</span>
+                </div>
+                <Progress value={allowanceUsed} className={exceededMinutes ? "bg-red-100 [&>div]:bg-[#d8573f]" : "bg-[#e8f5ef] [&>div]:bg-[#20a478]"} />
+              </div>
+              <span className={`shrink-0 text-[10px] font-semibold ${exceededMinutes ? "text-red-700" : "text-[#65637e]"}`}>
+                {exceededMinutes ? `${formatMinutes(exceededMinutes)} excess` : `${formatMinutes(remainingMinutes)} left`}
+              </span>
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function PunchDataTab({ employeeCode }: { employeeCode: string }) {
   const [month, setMonth] = useState(new Date());
   const year = month.getFullYear();
@@ -145,10 +285,11 @@ function PunchDataTab({ employeeCode }: { employeeCode: string }) {
     [month]
   );
 
-  const rows = monthDays.map((day) => {
+  const rows: PunchDayRow[] = monthDays.map((day) => {
     const key = format(day, "yyyy-MM-dd");
     const punch = punchMap.get(key);
     const isRestDay = isSunday(day);
+    const isCurrentDay = isToday(day);
     const isFutureDay = isFuture(day);
     const isODDay = odDates.has(key);
     const isLeaveDay = !isFutureDay && !punch && !isRestDay && !isODDay;
@@ -165,12 +306,15 @@ function PunchDataTab({ employeeCode }: { employeeCode: string }) {
       isLeaveDay,
       isODDay,
       isFutureDay,
+      isToday: isCurrentDay,
       hours: outHours,
     };
   });
 
   return (
-    <Card className="overflow-hidden border border-[#e6e4f2] bg-white shadow-[0_1px_2px_rgba(38,33,92,0.04),0_8px_24px_rgba(38,33,92,0.06)]">
+    <>
+      <PermissionBalanceCard employeeCode={employeeCode} month={month} rows={rows} />
+      <Card className="overflow-hidden border border-[#e6e4f2] bg-white shadow-[0_1px_2px_rgba(38,33,92,0.04),0_8px_24px_rgba(38,33,92,0.06)]">
       <div className="flex items-center justify-between gap-4 border-b border-[#edf1f8] bg-[#fdfdff] px-5 py-2">
         <div className="flex items-center gap-4">
           <div className="hidden lg:flex w-[80px] shrink-0 opacity-90 mix-blend-multiply">
@@ -272,7 +416,8 @@ function PunchDataTab({ employeeCode }: { employeeCode: string }) {
           </div>
         )}
       </CardContent>
-    </Card>
+      </Card>
+    </>
   );
 }
 
