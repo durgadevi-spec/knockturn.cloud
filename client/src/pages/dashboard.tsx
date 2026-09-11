@@ -153,7 +153,7 @@ const QUICK_LINKS: QuickLink[] = [
     title: "HRMS",
     description: "Access the Human Resource Management System",
     icon: Briefcase,
-    url: "http://147.93.28.144:3001/",
+    url: "http://147.93.28.144:4173",
     color: "from-cyan-500 to-cyan-600",
     bgColor: "bg-cyan-50",
     iconColor: "text-cyan-600",
