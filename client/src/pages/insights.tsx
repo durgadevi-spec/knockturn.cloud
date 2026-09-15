@@ -166,10 +166,40 @@ function PermissionBalanceCard({
     [rows]
   );
 
-  const approvedPermissionMinutes = Number((data as any)?.permissionHours || 0) * 60;
+  const permissionEntries: Array<{ permissionDate: string; hours: number }> = (data as any)?.permissions ?? [];
+  const approvedPermissionMinutes = permissionEntries.reduce((total, permission) => total + permission.hours * 60, 0);
+  const shortfallByDate = useMemo(() => {
+    const byDate = new Map<string, number>();
+    rows.forEach((row) => {
+      if (
+        row.isRestDay ||
+        row.isLeaveDay ||
+        row.isODDay ||
+        row.isFutureDay ||
+        row.isToday ||
+        !row.punch?.punch_in ||
+        !row.punch.punch_out
+      ) return;
+      const workedMinutes = Number.parseFloat(row.hours) * 60;
+      if (workedMinutes > 0) byDate.set(row.key, Math.max(0, 9 * 60 - workedMinutes));
+    });
+    return byDate;
+  }, [rows]);
+  const deductedMinutes = useMemo(() => {
+    const permissionByDate = new Map<string, number>();
+    permissionEntries.forEach((permission) => {
+      const dateKey = format(new Date(permission.permissionDate), "yyyy-MM-dd");
+      permissionByDate.set(dateKey, (permissionByDate.get(dateKey) || 0) + permission.hours * 60);
+    });
+    const dates = new Set<string>();
+    shortfallByDate.forEach((_, dateKey) => dates.add(dateKey));
+    permissionByDate.forEach((_, dateKey) => dates.add(dateKey));
+    return Array.from(dates).reduce(
+      (total, dateKey) => total + Math.max(shortfallByDate.get(dateKey) || 0, permissionByDate.get(dateKey) || 0),
+      0
+    );
+  }, [permissionEntries, shortfallByDate]);
   const odDays = rows.filter((row) => row.isODDay && !row.isRestDay && !row.isFutureDay && !row.isToday).length;
-  // Both recorded LMS permission and punch shortfall consume the monthly allowance.
-  const deductedMinutes = approvedPermissionMinutes + dailyShortfallMinutes;
   const allowanceMinutes = 3 * 60;
   const remainingMinutes = Math.max(0, allowanceMinutes - deductedMinutes);
   const exceededMinutes = Math.max(0, deductedMinutes - allowanceMinutes);

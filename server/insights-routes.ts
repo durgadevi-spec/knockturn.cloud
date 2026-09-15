@@ -108,7 +108,7 @@ export function registerInsightsRoutes(app: Express) {
       }
 
       const result = await lms.query(
-        `SELECT COALESCE(SUM(p.total_hours), 0) AS permission_hours
+        `SELECT p.permission_date, p.total_hours
          FROM permissions p
          WHERE (
            REGEXP_REPLACE(LOWER(p.username), '[^a-z0-9]', '', 'g') LIKE '%' || REGEXP_REPLACE(LOWER($1::text), '[^a-z0-9]', '', 'g') || '%'
@@ -120,7 +120,12 @@ export function registerInsightsRoutes(app: Express) {
         [empName, y, m]
       );
 
-      res.json({ permissionHours: Number(result.rows[0]?.permission_hours || 0) });
+      res.json({
+        permissions: result.rows.map((row) => ({
+          permissionDate: row.permission_date,
+          hours: Number(row.total_hours || 0),
+        })),
+      });
     } catch (error: any) {
       console.error("[insights] permission-balance error:", error.message);
       res.status(error.status || 500).json({ error: error.message || "Failed to load permission balance" });
