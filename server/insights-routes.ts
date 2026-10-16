@@ -45,8 +45,10 @@ export function registerInsightsRoutes(app: Express) {
       );
 
       // Fetch approved and pending OD dates from LMS so pending OD does not
-      // create a shortfall before the request is finalized.
+      // create a shortfall before the request is finalized. Approved
+      // half-day leave ranges reduce the required work hours for those days.
       let odRanges: Array<{ start_date: string; end_date: string }> = [];
+      let halfDayLeaveRanges: Array<{ start_date: string; end_date: string }> = [];
       try {
         const lms = requirePool(lmsPool, "LMS database");
         const hrms = requirePool(hrmsPool, "HRMS database");
@@ -72,11 +74,29 @@ export function registerInsightsRoutes(app: Express) {
           [empName, y, m]
         );
         odRanges = odResult.rows;
+
+        const halfDayLeaveResult = await lms.query(
+          `SELECT l.start_date, l.end_date
+           FROM leaves l
+           WHERE (
+             REPLACE(LOWER(l.username), ' ', '') LIKE '%' || REPLACE(LOWER($1::text), ' ', '') || '%'
+             OR REPLACE(LOWER($1::text), ' ', '') LIKE '%' || REPLACE(LOWER(l.username), ' ', '') || '%'
+             OR REPLACE(LOWER(l.employee_name), ' ', '') LIKE '%' || REPLACE(LOWER($1::text), ' ', '') || '%'
+             OR REPLACE(LOWER($1::text), ' ', '') LIKE '%' || REPLACE(LOWER(l.employee_name), ' ', '') || '%'
+           )
+             AND LOWER(l.status) = 'approved'
+             AND LOWER(COALESCE(l.leave_duration_type, '')) LIKE '%half%'
+             AND LOWER(l.leave_type) <> 'od'
+             AND l.start_date <= (make_date($2, $3, 1) + interval '1 month' - interval '1 day')
+             AND l.end_date >= make_date($2, $3, 1)`,
+          [empName, y, m]
+        );
+        halfDayLeaveRanges = halfDayLeaveResult.rows;
       } catch (odErr: any) {
-        console.warn("[insights] OD lookup failed (non-fatal):", odErr.message);
+        console.warn("[insights] OD/half-day leave lookup failed (non-fatal):", odErr.message);
       }
 
-      res.json({ punches: result.rows, odRanges });
+      res.json({ punches: result.rows, odRanges, halfDayLeaveRanges });
     } catch (error: any) {
       console.error("[insights] punches error:", error.message);
       res.status(error.status || 500).json({ error: error.message || "Failed to load punch data" });
@@ -253,6 +273,7 @@ export function registerInsightsRoutes(app: Express) {
 
       const result = await pool.query(
         `SELECT 'L-' || l.id AS id, (l.leave_type || ' Leave') AS type,
+                CASE WHEN LOWER(l.leave_type) = 'od' THEN 'od' ELSE 'leave' END AS category,
                 l.start_date AS from_date, l.end_date AS to_date, l.status, l.reason
          FROM leaves l
          WHERE (
@@ -264,6 +285,7 @@ export function registerInsightsRoutes(app: Express) {
            AND date_part('year', l.start_date) = $2
          UNION ALL
          SELECT 'P-' || p.id AS id, (p.permission_type || ' Permission') AS type,
+                'permission' AS category,
                 p.permission_date AS from_date, p.permission_date AS to_date, p.status, p.reason
          FROM permissions p
          WHERE (

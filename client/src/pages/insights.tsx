@@ -117,6 +117,7 @@ type PunchDayRow = {
   punch: { work_date: string; punch_in: string | null; punch_out: string | null } | undefined;
   isRestDay: boolean;
   isLeaveDay: boolean;
+  isHalfDayLeave: boolean;
   isODDay: boolean;
   isFutureDay: boolean;
   isToday: boolean;
@@ -128,6 +129,11 @@ function formatMinutes(minutes: number) {
   const hours = Math.floor(rounded / 60);
   const remainingMinutes = rounded % 60;
   return hours ? `${hours}h ${remainingMinutes.toString().padStart(2, "0")}m` : `${remainingMinutes}m`;
+}
+
+function workedMinutes(row: PunchDayRow) {
+  if (!row.punch?.punch_in || !row.punch.punch_out) return 0;
+  return (new Date(row.punch.punch_out).getTime() - new Date(row.punch.punch_in).getTime()) / 60_000;
 }
 
 function PermissionBalanceCard({
@@ -159,9 +165,10 @@ function PermissionBalanceCard({
         ) {
           return total;
         }
-        const workedMinutes = Number.parseFloat(row.hours) * 60;
-        if (workedMinutes <= 0) return total;
-        return total + Math.max(0, 9 * 60 - workedMinutes);
+        const minutesWorked = workedMinutes(row);
+        if (minutesWorked <= 0) return total;
+        const requiredMinutes = row.isHalfDayLeave ? 4.5 * 60 : 9 * 60;
+        return total + Math.max(0, requiredMinutes - minutesWorked);
       }, 0),
     [rows]
   );
@@ -180,8 +187,11 @@ function PermissionBalanceCard({
         !row.punch?.punch_in ||
         !row.punch.punch_out
       ) return;
-      const workedMinutes = Number.parseFloat(row.hours) * 60;
-      if (workedMinutes > 0) byDate.set(row.key, Math.max(0, 9 * 60 - workedMinutes));
+      const minutesWorked = workedMinutes(row);
+      if (minutesWorked > 0) {
+        const requiredMinutes = row.isHalfDayLeave ? 4.5 * 60 : 9 * 60;
+        byDate.set(row.key, Math.max(0, requiredMinutes - minutesWorked));
+      }
     });
     return byDate;
   }, [rows]);
@@ -292,6 +302,8 @@ function PunchDataTab({ employeeCode }: { employeeCode: string }) {
 
   const odRanges: Array<{ start_date: string; end_date: string }> =
     (data as any)?.odRanges ?? [];
+  const halfDayLeaveRanges: Array<{ start_date: string; end_date: string }> =
+    (data as any)?.halfDayLeaveRanges ?? [];
 
   // Build a set of OD dates for quick lookup
   const odDates = useMemo(() => {
@@ -322,6 +334,11 @@ function PunchDataTab({ employeeCode }: { employeeCode: string }) {
     const isCurrentDay = isToday(day);
     const isFutureDay = isFuture(day);
     const isODDay = odDates.has(key);
+    const isHalfDayLeave = halfDayLeaveRanges.some((range) => {
+      const start = format(new Date(range.start_date), "yyyy-MM-dd");
+      const end = format(new Date(range.end_date), "yyyy-MM-dd");
+      return key >= start && key <= end;
+    });
     const isLeaveDay = !isFutureDay && !punch && !isRestDay && !isODDay;
     const outHours =
       punch && punch.punch_in && punch.punch_out
@@ -334,6 +351,7 @@ function PunchDataTab({ employeeCode }: { employeeCode: string }) {
       punch,
       isRestDay,
       isLeaveDay,
+      isHalfDayLeave,
       isODDay,
       isFutureDay,
       isToday: isCurrentDay,
@@ -405,7 +423,7 @@ function PunchDataTab({ employeeCode }: { employeeCode: string }) {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {rows.map(({ key, date, punch, isRestDay, isLeaveDay, isODDay, isFutureDay, hours }) => {
+                {rows.map(({ key, date, punch, isRestDay, isLeaveDay, isHalfDayLeave, isODDay, isFutureDay, hours }) => {
                   const statusColor = isODDay ? "bg-[#3b82f6]" : isLeaveDay ? "bg-[#f4b740]" : isRestDay ? "bg-[#9ea8c1]" : isFutureDay ? "bg-[#edf1f8]" : "bg-[#20b286]";
 
                   return (
@@ -417,6 +435,10 @@ function PunchDataTab({ employeeCode }: { employeeCode: string }) {
                           {isODDay ? (
                             <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#3b82f6]">
                               OD
+                            </span>
+                          ) : isHalfDayLeave ? (
+                            <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#7e849d]">
+                              Half-day leave
                             </span>
                           ) : isRestDay || (isLeaveDay && !isFutureDay) ? (
                             <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#7e849d]">
@@ -889,13 +911,6 @@ const LEAVE_TYPE_TABS = [
 
 type LeaveTypeFilter = (typeof LEAVE_TYPE_TABS)[number]["id"];
 
-function classifyLeaveType(type: string): LeaveTypeFilter {
-  const t = (type || "").toLowerCase();
-  if (t.includes("od") || t.includes("on duty") || t.includes("on-duty")) return "od";
-  if (t.includes("permission")) return "permission";
-  return "leave";
-}
-
 function LeavesTab({ employeeCode }: { employeeCode: string }) {
   const [month, setMonth] = useState(new Date());
   const [typeFilter, setTypeFilter] = useState<LeaveTypeFilter>("all");
@@ -909,6 +924,7 @@ function LeavesTab({ employeeCode }: { employeeCode: string }) {
   const allLeaves: Array<{
     id: string | number;
     type: string;
+    category: Exclude<LeaveTypeFilter, "all">;
     from_date: string;
     to_date: string;
     status: string;
@@ -927,7 +943,7 @@ function LeavesTab({ employeeCode }: { employeeCode: string }) {
   const leaves = useMemo(
     () => typeFilter === "all"
       ? monthLeaves
-      : monthLeaves.filter((l) => classifyLeaveType(l.type) === typeFilter),
+      : monthLeaves.filter((l) => l.category === typeFilter),
     [monthLeaves, typeFilter]
   );
 
