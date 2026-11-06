@@ -24,6 +24,7 @@ import {
   Briefcase,
   Gauge,
   Settings,
+  UserRoundCheck,
 } from "lucide-react";
 
 import logoUrl from "@assets/WhatsApp_Image_2026-01-17_at_10.38.06_1768626585689.jpeg";
@@ -172,6 +173,18 @@ const QUICK_LINKS: QuickLink[] = [
     available: true,
     featured: true,
   },
+  {
+    id: "visitor-management",
+    title: "Visitor Management",
+    description: "Manage visitor check-ins and visitor records",
+    icon: UserRoundCheck,
+    url: `http://${BASE_IP}:5016/`,
+    color: "from-indigo-500 to-violet-600",
+    bgColor: "bg-indigo-50",
+    iconColor: "text-indigo-600",
+    available: true,
+    featured: false,
+  },
 ];
 
 const ALLOWED_BOQ_EMPLOYEE_CODES = [
@@ -224,6 +237,8 @@ const ALLOWED_HRMS_EMPLOYEE_CODES = [
   "E0047",
   "E0061",
 ];
+
+const ALLOWED_VISITOR_MANAGEMENT_EMPLOYEE_CODES = ["E0001", "E0048", "E0046"];
 
 const MOTIVATIONAL_QUOTES = [
   {
@@ -522,6 +537,9 @@ export default function Dashboard() {
     }
     if (link.id === "hrms") {
       return ALLOWED_HRMS_EMPLOYEE_CODES.includes(user.employeeCode);
+    }
+    if (link.id === "visitor-management") {
+      return ALLOWED_VISITOR_MANAGEMENT_EMPLOYEE_CODES.includes(user.employeeCode);
     }
     return true;
   });

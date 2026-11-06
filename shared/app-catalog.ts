@@ -4,11 +4,6 @@
 //     (defaults + any admin overrides stored in employee_app_access)
 //   - client/src/pages/admin-app-access.tsx, to render the assignment UI
 //
-// This does NOT change client/src/pages/dashboard.tsx's own QUICK_LINKS /
-// ALLOWED_*_EMPLOYEE_CODES arrays (left untouched on purpose), but the
-// default lists below were copied from them so behavior stays identical
-// until an admin explicitly overrides something.
-
 export interface AppCatalogEntry {
     id: string;
     title: string;
@@ -71,6 +66,12 @@ export const APP_CATALOG: AppCatalogEntry[] = [
         defaultAllowedCodes: ["E0048", "E0046", "E0049", "E0001", "E0047", "E0061"],
     },
     { id: "policy", title: "Company Policy", defaultAccess: "open" },
+    {
+        id: "visitor-management",
+        title: "Visitor Management",
+        defaultAccess: "restricted",
+        defaultAllowedCodes: ["E0001", "E0048", "E0046"],
+    },
 ];
 
 export function isAppAllowedByDefault(appId: string, employeeCode: string): boolean {
